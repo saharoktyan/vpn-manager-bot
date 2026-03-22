@@ -14,7 +14,6 @@ from services.xray import get_server_link_status
 from utils.tg import answer_cb, safe_delete_by_id, safe_delete_update_message, safe_edit_by_ids, safe_edit_message
 
 from .admin_common import guard, kb_back_menu
-from utils.keyboards import kb_admin_menu
 
 
 def _md(value: Any) -> str:
@@ -98,6 +97,30 @@ def _wizard_close(context: CallbackContext, text: str | None = None) -> None:
     _wizard_clear(context)
 
 
+def _servers_menu_text(lang: str) -> str:
+    return f"{t(lang, 'admin.menu_title')}\n\n{t(lang, 'menu.admin_choose')}"
+
+
+def _step_nav_markup(
+    lang: str,
+    *,
+    show_back: bool = True,
+    next_payload: str | None = None,
+    back_payload: str | None = None,
+    close_payload: str | None = None,
+) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    nav_row: list[InlineKeyboardButton] = []
+    if show_back:
+        nav_row.append(InlineKeyboardButton(t(lang, "menu.back"), callback_data=back_payload or f"{CB_SRV}back"))
+    if next_payload:
+        nav_row.append(InlineKeyboardButton(t(lang, "admin.wizard.next"), callback_data=next_payload))
+    if nav_row:
+        rows.append(nav_row)
+    rows.append([InlineKeyboardButton(t(lang, "admin.wizard.close"), callback_data=close_payload or f"{CB_SRV}list")])
+    return InlineKeyboardMarkup(rows)
+
+
 def _server_menu_markup(lang: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
@@ -113,8 +136,11 @@ def _transport_markup(lang: str) -> InlineKeyboardMarkup:
         [
             [InlineKeyboardButton("local", callback_data=f"{CB_SRV}transport:local")],
             [InlineKeyboardButton("ssh", callback_data=f"{CB_SRV}transport:ssh")],
-            [InlineKeyboardButton(t(lang, "menu.back"), callback_data=f"{CB_SRV}back")],
-            [InlineKeyboardButton(t(lang, "admin.wizard.cancel"), callback_data=f"{CB_SRV}cancel")],
+            [
+                InlineKeyboardButton(t(lang, "menu.back"), callback_data=f"{CB_SRV}back"),
+                InlineKeyboardButton(t(lang, "admin.wizard.next"), callback_data=f"{CB_SRV}next"),
+            ],
+            [InlineKeyboardButton(t(lang, "admin.wizard.close"), callback_data=f"{CB_SRV}list")],
         ]
     )
 
@@ -127,9 +153,11 @@ def _protocol_markup(selected: Set[str], lang: str) -> InlineKeyboardMarkup:
         [
             [InlineKeyboardButton(mark("xray", "Xray"), callback_data=f"{CB_SRV}protocol:xray")],
             [InlineKeyboardButton(mark("awg", "AWG"), callback_data=f"{CB_SRV}protocol:awg")],
-            [InlineKeyboardButton("✅ Далее" if lang == "ru" else "✅ Next", callback_data=f"{CB_SRV}protocol:done")],
-            [InlineKeyboardButton(t(lang, "menu.back"), callback_data=f"{CB_SRV}back")],
-            [InlineKeyboardButton(t(lang, "admin.wizard.cancel"), callback_data=f"{CB_SRV}cancel")],
+            [
+                InlineKeyboardButton(t(lang, "menu.back"), callback_data=f"{CB_SRV}back"),
+                InlineKeyboardButton("✅ Далее" if lang == "ru" else "✅ Next", callback_data=f"{CB_SRV}protocol:done"),
+            ],
+            [InlineKeyboardButton(t(lang, "admin.wizard.close"), callback_data=f"{CB_SRV}list")],
         ]
     )
 
@@ -140,7 +168,7 @@ def _pick_server_markup(servers: Sequence[RegisteredServer], lang: str) -> Inlin
         for server in servers
     ]
     rows.append([InlineKeyboardButton(t(lang, "menu.back"), callback_data=f"{CB_SRV}list")])
-    rows.append([InlineKeyboardButton(t(lang, "admin.wizard.cancel"), callback_data=f"{CB_SRV}cancel")])
+    rows.append([InlineKeyboardButton(t(lang, "admin.wizard.close"), callback_data=f"{CB_SRV}list")])
     return InlineKeyboardMarkup(rows)
 
 
@@ -376,8 +404,11 @@ def _summary_markup(lang: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
             [InlineKeyboardButton("💾 Сохранить" if lang == "ru" else "💾 Save", callback_data=f"{CB_SRV}save")],
-            [InlineKeyboardButton(t(lang, "menu.back"), callback_data=f"{CB_SRV}back")],
-            [InlineKeyboardButton(t(lang, "admin.wizard.cancel"), callback_data=f"{CB_SRV}cancel")],
+            [
+                InlineKeyboardButton(t(lang, "menu.back"), callback_data=f"{CB_SRV}back"),
+                InlineKeyboardButton(t(lang, "admin.wizard.next"), callback_data=f"{CB_SRV}save"),
+            ],
+            [InlineKeyboardButton(t(lang, "admin.wizard.close"), callback_data=f"{CB_SRV}list")],
         ]
     )
 
@@ -386,6 +417,22 @@ def _keep_current(text: str, current: str) -> str:
     if text == ".":
         return current
     return text or current
+
+
+def _render_step_prompt(context: CallbackContext, lang: str, step: str, data: Dict[str, Any]) -> None:
+    prompts = {
+        "key": t(lang, "admin.wizard.server_create_key"),
+        "title": t(lang, "admin.wizard.server_create_title"),
+        "flag": t(lang, "admin.wizard.server_create_flag", flag=data["flag"]),
+        "region": t(lang, "admin.wizard.server_create_region"),
+        "target": t(lang, "admin.wizard.server_enter_target"),
+        "public_host": t(lang, "admin.wizard.server_enter_public_host_local")
+        if data.get("transport") == "local"
+        else t(lang, "admin.wizard.server_enter_public_host"),
+        "notes": "Введи заметки для сервера или `.` чтобы оставить как есть." if lang == "ru" else "Enter server notes or `.` to keep the current value.",
+    }
+    show_back = step != "key"
+    _wizard_edit(context, prompts[step], _step_nav_markup(lang, show_back=show_back, next_payload=f"{CB_SRV}next", close_payload=f"{CB_SRV}list"))
 
 
 def serverwizard_cmd(update: Update, context: CallbackContext) -> None:
@@ -418,7 +465,7 @@ def server_wizard_text(update: Update, context: CallbackContext) -> None:
         data["key"] = value
         w["step"] = "title"
         _wizard_set(context, w)
-        _wizard_edit(context, t(lang, "admin.wizard.server_create_title"), InlineKeyboardMarkup([[InlineKeyboardButton(t(lang, "menu.back"), callback_data=f"{CB_SRV}back")], [InlineKeyboardButton(t(lang, "admin.wizard.cancel"), callback_data=f"{CB_SRV}cancel")]]))
+        _render_step_prompt(context, lang, "title", data)
         safe_delete_update_message(update, context)
         return
 
@@ -432,7 +479,7 @@ def server_wizard_text(update: Update, context: CallbackContext) -> None:
             return
         w["step"] = "flag"
         _wizard_set(context, w)
-        _wizard_edit(context, t(lang, "admin.wizard.server_create_flag", flag=data["flag"]), InlineKeyboardMarkup([[InlineKeyboardButton(t(lang, "menu.back"), callback_data=f"{CB_SRV}back")], [InlineKeyboardButton(t(lang, "admin.wizard.cancel"), callback_data=f"{CB_SRV}cancel")]]))
+        _render_step_prompt(context, lang, "flag", data)
         safe_delete_update_message(update, context)
         return
 
@@ -446,7 +493,7 @@ def server_wizard_text(update: Update, context: CallbackContext) -> None:
             return
         w["step"] = "region"
         _wizard_set(context, w)
-        _wizard_edit(context, t(lang, "admin.wizard.server_create_region"), InlineKeyboardMarkup([[InlineKeyboardButton(t(lang, "menu.back"), callback_data=f"{CB_SRV}back")], [InlineKeyboardButton(t(lang, "admin.wizard.cancel"), callback_data=f"{CB_SRV}cancel")]]))
+        _render_step_prompt(context, lang, "region", data)
         safe_delete_update_message(update, context)
         return
 
@@ -474,11 +521,7 @@ def server_wizard_text(update: Update, context: CallbackContext) -> None:
             return
         w["step"] = "public_host"
         _wizard_set(context, w)
-        _wizard_edit(
-            context,
-            t(lang, "admin.wizard.server_enter_public_host"),
-            InlineKeyboardMarkup([[InlineKeyboardButton(t(lang, "menu.back"), callback_data=f"{CB_SRV}back")], [InlineKeyboardButton(t(lang, "admin.wizard.cancel"), callback_data=f"{CB_SRV}cancel")]]),
-        )
+        _render_step_prompt(context, lang, "public_host", data)
         safe_delete_update_message(update, context)
         return
 
@@ -537,14 +580,10 @@ def on_server_callback(update: Update, context: CallbackContext, payload: str) -
 
     w = _wizard_get(context)
     if payload == "cancel":
-        _wizard_clear(context)
-        safe_edit_message(
-            update,
-            context,
-            f"{t(lang, 'admin.menu_title')}\n\n{t(lang, 'menu.admin_choose')}",
-            reply_markup=kb_admin_menu(lang),
-            parse_mode=PARSE_MODE,
-        )
+        servers = list_servers(include_disabled=True)
+        w["step"] = "menu"
+        _wizard_set(context, w)
+        _wizard_edit(context, _server_dashboard_text(servers, lang), _server_dashboard_markup(servers, lang))
         return
     if not w:
         safe_edit_message(update, context, t(lang, "admin.wizard.server_inactive"), reply_markup=kb_back_menu(lang), parse_mode=None)
@@ -560,6 +599,67 @@ def on_server_callback(update: Update, context: CallbackContext, payload: str) -
         _wizard_edit(context, _server_dashboard_text(servers, lang), _server_dashboard_markup(servers, lang))
         return
 
+    if payload == "next":
+        step = str(w.get("step") or "")
+        if step == "key":
+            if not str(data.get("key") or "").strip():
+                _render_step_prompt(context, lang, "key", data)
+                return
+            w["step"] = "title"
+            _wizard_set(context, w)
+            _render_step_prompt(context, lang, "title", data)
+            return
+        if step == "title":
+            if not str(data.get("title") or "").strip():
+                _render_step_prompt(context, lang, "title", data)
+                return
+            w["step"] = "flag"
+            _wizard_set(context, w)
+            _render_step_prompt(context, lang, "flag", data)
+            return
+        if step == "flag":
+            w["step"] = "region"
+            _wizard_set(context, w)
+            _render_step_prompt(context, lang, "region", data)
+            return
+        if step == "region":
+            if not str(data.get("region") or "").strip():
+                _render_step_prompt(context, lang, "region", data)
+                return
+            w["step"] = "transport"
+            _wizard_set(context, w)
+            _wizard_edit(context, t(lang, "admin.wizard.server_choose_transport"), _transport_markup(lang))
+            return
+        if step == "transport":
+            if data.get("transport") == "local":
+                data["target"] = ""
+                w["step"] = "public_host"
+                _wizard_set(context, w)
+                _render_step_prompt(context, lang, "public_host", data)
+                return
+            w["step"] = "target"
+            _wizard_set(context, w)
+            _render_step_prompt(context, lang, "target", data)
+            return
+        if step == "target":
+            if data.get("transport") == "ssh" and not str(data.get("target") or "").strip():
+                _render_step_prompt(context, lang, "target", data)
+                return
+            w["step"] = "public_host"
+            _wizard_set(context, w)
+            _render_step_prompt(context, lang, "public_host", data)
+            return
+        if step == "public_host":
+            w["step"] = "protocols"
+            _wizard_set(context, w)
+            _wizard_edit(context, t(lang, "admin.wizard.server_choose_protocols"), _protocol_markup(data["protocol_kinds"], lang))
+            return
+        if step == "notes":
+            w["step"] = "edit_menu"
+            _wizard_set(context, w)
+            _wizard_edit(context, _server_edit_menu_text(data, lang), _server_edit_menu_markup(data["key"], lang))
+            return
+
     if payload.startswith("card:"):
         _render_server_card(context, payload.split(":", 1)[1])
         return
@@ -569,22 +669,22 @@ def on_server_callback(update: Update, context: CallbackContext, payload: str) -
             if w["step"] == "title":
                 w["step"] = "key"
                 _wizard_set(context, w)
-                _wizard_edit(context, t(lang, "admin.wizard.server_create_key"), InlineKeyboardMarkup([[InlineKeyboardButton(t(lang, "admin.wizard.cancel"), callback_data=f"{CB_SRV}cancel")]]))
+                _render_step_prompt(context, lang, "key", data)
                 return
             if w["step"] == "flag":
                 w["step"] = "title"
                 _wizard_set(context, w)
-                _wizard_edit(context, t(lang, "admin.wizard.server_create_title"), InlineKeyboardMarkup([[InlineKeyboardButton(t(lang, "menu.back"), callback_data=f"{CB_SRV}back")], [InlineKeyboardButton(t(lang, "admin.wizard.cancel"), callback_data=f"{CB_SRV}cancel")]]))
+                _render_step_prompt(context, lang, "title", data)
                 return
             if w["step"] == "region":
                 w["step"] = "flag"
                 _wizard_set(context, w)
-                _wizard_edit(context, t(lang, "admin.wizard.server_create_flag", flag=data["flag"]), InlineKeyboardMarkup([[InlineKeyboardButton(t(lang, "menu.back"), callback_data=f"{CB_SRV}back")], [InlineKeyboardButton(t(lang, "admin.wizard.cancel"), callback_data=f"{CB_SRV}cancel")]]))
+                _render_step_prompt(context, lang, "flag", data)
                 return
             if w["step"] == "transport":
                 w["step"] = "region"
                 _wizard_set(context, w)
-                _wizard_edit(context, t(lang, "admin.wizard.server_create_region"), InlineKeyboardMarkup([[InlineKeyboardButton(t(lang, "menu.back"), callback_data=f"{CB_SRV}back")], [InlineKeyboardButton(t(lang, "admin.wizard.cancel"), callback_data=f"{CB_SRV}cancel")]]))
+                _render_step_prompt(context, lang, "region", data)
                 return
             if w["step"] == "target":
                 w["step"] = "transport"
@@ -599,12 +699,12 @@ def on_server_callback(update: Update, context: CallbackContext, payload: str) -
                 else:
                     w["step"] = "target"
                     _wizard_set(context, w)
-                    _wizard_edit(context, t(lang, "admin.wizard.server_enter_target"), InlineKeyboardMarkup([[InlineKeyboardButton(t(lang, "menu.back"), callback_data=f"{CB_SRV}back")], [InlineKeyboardButton(t(lang, "admin.wizard.cancel"), callback_data=f"{CB_SRV}cancel")]]))
+                    _render_step_prompt(context, lang, "target", data)
                 return
             if w["step"] == "protocols":
                 w["step"] = "public_host"
                 _wizard_set(context, w)
-                _wizard_edit(context, t(lang, "admin.wizard.server_enter_public_host"), InlineKeyboardMarkup([[InlineKeyboardButton(t(lang, "menu.back"), callback_data=f"{CB_SRV}back")], [InlineKeyboardButton(t(lang, "admin.wizard.cancel"), callback_data=f"{CB_SRV}cancel")]]))
+                _render_step_prompt(context, lang, "public_host", data)
                 return
         else:
             if w["step"] == "pick":
@@ -632,7 +732,7 @@ def on_server_callback(update: Update, context: CallbackContext, payload: str) -
                 else:
                     w["step"] = "title"
                     _wizard_set(context, w)
-                    _wizard_edit(context, t(lang, "admin.wizard.server_edit", key=data["key"], title=data["title"]), InlineKeyboardMarkup([[InlineKeyboardButton(t(lang, "menu.back"), callback_data=f"{CB_SRV}back")], [InlineKeyboardButton(t(lang, "admin.wizard.cancel"), callback_data=f"{CB_SRV}cancel")]]))
+                    _wizard_edit(context, t(lang, "admin.wizard.server_edit", key=data["key"], title=data["title"]), _step_nav_markup(lang, next_payload=f"{CB_SRV}next", close_payload=f"{CB_SRV}list"))
                 return
             if w["step"] == "region":
                 if w.get("edit_single"):
@@ -642,7 +742,7 @@ def on_server_callback(update: Update, context: CallbackContext, payload: str) -
                 else:
                     w["step"] = "flag"
                     _wizard_set(context, w)
-                    _wizard_edit(context, t(lang, "admin.wizard.server_create_flag", flag=data["flag"]), InlineKeyboardMarkup([[InlineKeyboardButton(t(lang, "menu.back"), callback_data=f"{CB_SRV}back")], [InlineKeyboardButton(t(lang, "admin.wizard.cancel"), callback_data=f"{CB_SRV}cancel")]]))
+                    _render_step_prompt(context, lang, "flag", data)
                 return
             if w["step"] == "transport":
                 if w.get("edit_single"):
@@ -652,7 +752,7 @@ def on_server_callback(update: Update, context: CallbackContext, payload: str) -
                 else:
                     w["step"] = "region"
                     _wizard_set(context, w)
-                    _wizard_edit(context, t(lang, "admin.wizard.server_create_region"), InlineKeyboardMarkup([[InlineKeyboardButton(t(lang, "menu.back"), callback_data=f"{CB_SRV}back")], [InlineKeyboardButton(t(lang, "admin.wizard.cancel"), callback_data=f"{CB_SRV}cancel")]]))
+                    _render_step_prompt(context, lang, "region", data)
                 return
             if w["step"] == "target":
                 if w.get("edit_single"):
@@ -677,7 +777,7 @@ def on_server_callback(update: Update, context: CallbackContext, payload: str) -
                     else:
                         w["step"] = "target"
                         _wizard_set(context, w)
-                        _wizard_edit(context, t(lang, "admin.wizard.server_enter_target"), InlineKeyboardMarkup([[InlineKeyboardButton(t(lang, "menu.back"), callback_data=f"{CB_SRV}back")], [InlineKeyboardButton(t(lang, "admin.wizard.cancel"), callback_data=f"{CB_SRV}cancel")]]))
+                        _render_step_prompt(context, lang, "target", data)
                 return
             if w["step"] == "protocols":
                 if w.get("edit_single"):
@@ -687,7 +787,7 @@ def on_server_callback(update: Update, context: CallbackContext, payload: str) -
                 else:
                     w["step"] = "public_host"
                     _wizard_set(context, w)
-                    _wizard_edit(context, t(lang, "admin.wizard.server_enter_public_host"), InlineKeyboardMarkup([[InlineKeyboardButton(t(lang, "menu.back"), callback_data=f"{CB_SRV}back")], [InlineKeyboardButton(t(lang, "admin.wizard.cancel"), callback_data=f"{CB_SRV}cancel")]]))
+                    _render_step_prompt(context, lang, "public_host", data)
                 return
             if w["step"] == "notes":
                 w["step"] = "edit_menu"
@@ -712,7 +812,7 @@ def on_server_callback(update: Update, context: CallbackContext, payload: str) -
             "protocol_kinds": set(),
         }
         _wizard_set(context, w)
-        _wizard_edit(context, t(lang, "admin.wizard.server_create_key"), InlineKeyboardMarkup([[InlineKeyboardButton(t(lang, "admin.wizard.cancel"), callback_data=f"{CB_SRV}cancel")]]))
+        _render_step_prompt(context, lang, "key", data)
         return
 
     if payload == "start:edit":
@@ -751,7 +851,7 @@ def on_server_callback(update: Update, context: CallbackContext, payload: str) -
         _wizard_edit(
             context,
             t(lang, "admin.wizard.server_edit", key=_md(server_key), title=_md(server.title)),
-            InlineKeyboardMarkup([[InlineKeyboardButton(t(lang, "menu.back"), callback_data=f"{CB_SRV}back")], [InlineKeyboardButton(t(lang, "admin.wizard.cancel"), callback_data=f"{CB_SRV}cancel")]]),
+            _step_nav_markup(lang, next_payload=f"{CB_SRV}next", close_payload=f"{CB_SRV}list"),
         )
         return
 
@@ -792,12 +892,12 @@ def on_server_callback(update: Update, context: CallbackContext, payload: str) -
             _wizard_edit(
                 context,
                 t(lang, "admin.wizard.server_enter_public_host_local"),
-                InlineKeyboardMarkup([[InlineKeyboardButton(t(lang, "menu.back"), callback_data=f"{CB_SRV}back")], [InlineKeyboardButton(t(lang, "admin.wizard.cancel"), callback_data=f"{CB_SRV}cancel")]]),
+                _step_nav_markup(lang, next_payload=f"{CB_SRV}next", close_payload=f"{CB_SRV}list"),
             )
             w["step"] = "public_host"
             _wizard_set(context, w)
             return
-        _wizard_edit(context, t(lang, "admin.wizard.server_enter_target"), InlineKeyboardMarkup([[InlineKeyboardButton(t(lang, "menu.back"), callback_data=f"{CB_SRV}back")], [InlineKeyboardButton(t(lang, "admin.wizard.cancel"), callback_data=f"{CB_SRV}cancel")]]))
+        _render_step_prompt(context, lang, "target", data)
         return
 
     if payload.startswith("protocol:"):
@@ -840,7 +940,7 @@ def on_server_callback(update: Update, context: CallbackContext, payload: str) -
             w["step"] = "notes"
             _wizard_set(context, w)
             prompt = "Введи заметки для сервера или `.` чтобы оставить как есть." if lang == "ru" else "Enter server notes or `.` to keep the current value."
-            _wizard_edit(context, prompt, InlineKeyboardMarkup([[InlineKeyboardButton(t(lang, "menu.back"), callback_data=f"{CB_SRV}back")], [InlineKeyboardButton(t(lang, "admin.wizard.cancel"), callback_data=f"{CB_SRV}cancel")]]))
+            _wizard_edit(context, prompt, _step_nav_markup(lang, next_payload=f"{CB_SRV}next", close_payload=f"{CB_SRV}list"))
             return
         field_prompts = {
             "title": t(lang, "admin.wizard.server_create_title"),
@@ -852,7 +952,7 @@ def on_server_callback(update: Update, context: CallbackContext, payload: str) -
         if field in field_prompts:
             w["step"] = field
             _wizard_set(context, w)
-            _wizard_edit(context, field_prompts[field], InlineKeyboardMarkup([[InlineKeyboardButton(t(lang, "menu.back"), callback_data=f"{CB_SRV}back")], [InlineKeyboardButton(t(lang, "admin.wizard.cancel"), callback_data=f"{CB_SRV}cancel")]]))
+            _wizard_edit(context, field_prompts[field], _step_nav_markup(lang, next_payload=f"{CB_SRV}next", close_payload=f"{CB_SRV}list"))
             return
 
     if payload == "editsave":
@@ -892,7 +992,15 @@ def on_server_callback(update: Update, context: CallbackContext, payload: str) -
         )
         _wizard_close(
             context,
-            t(lang, "admin.wizard.server_saved", flag=server.flag, title=server.title, key=server.key, transport=server.transport, protocols=", ".join(server.protocol_kinds)),
+            t(
+                lang,
+                "admin.wizard.server_saved",
+                flag=server.flag,
+                title=server.title,
+                server_key=server.key,
+                transport=server.transport,
+                protocols=", ".join(server.protocol_kinds),
+            ),
         )
 
 
