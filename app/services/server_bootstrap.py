@@ -1729,7 +1729,7 @@ allowed_peer = {
 section = None
 with open(cfg, "r", encoding="utf-8", errors="ignore") as fh:
     for raw in fh:
-        line = raw.rstrip("\n")
+        line = raw.rstrip(chr(10))
         stripped = line.strip()
         if not stripped or stripped.startswith("#"):
             continue
