@@ -354,6 +354,9 @@ if [[ -z "$PUBLIC_HOST" ]]; then
 fi
 
 mkdir -p "$(dirname "$CONFIG_PATH")"
+if [[ -d "$CONFIG_PATH" ]]; then
+  mv "$CONFIG_PATH" "${CONFIG_PATH}.dirbak.$(date +%Y%m%d-%H%M%S)"
+fi
 
 X25519_OUT="$(docker run --rm "$IMAGE" x25519)"
 read -r PRIVATE_KEY REALITY_PASSWORD < <(
@@ -826,7 +829,13 @@ CONTAINER="${XRAY_CONTAINER_NAME:-xray}"
 CONFIG="${XRAY_CONFIG:-/opt/vpn-manager-node/xray/config.json}"
 
 mkdir -p "$DOCKER_DIR"
+chmod 0755 /opt >/dev/null 2>&1 || true
+chmod 0755 /opt/vpn-manager-node >/dev/null 2>&1 || true
 chmod 0755 "$DOCKER_DIR" >/dev/null 2>&1 || true
+
+if [[ -d "$CONFIG" ]]; then
+  mv "$CONFIG" "${CONFIG}.dirbak.$(date +%Y%m%d-%H%M%S)"
+fi
 
 if [[ ! -f "$CONFIG" ]]; then
   echo "Xray config not found: $CONFIG" >&2
@@ -843,6 +852,7 @@ docker_cmd pull "$IMAGE" >/dev/null
 docker_cmd run -d \
   --name "$CONTAINER" \
   --restart unless-stopped \
+  --user 0:0 \
   --network host \
   -v "$CONFIG:/etc/xray/config.json:ro" \
   "$IMAGE" run -c /etc/xray/config.json >/dev/null
@@ -1655,7 +1665,7 @@ AWG_DOCKERFILE = """FROM amneziavpn/amneziawg-go:latest
 
 LABEL maintainer="AmneziaVPN"
 
-RUN apk add --no-cache bash curl dumb-init
+RUN apk add --no-cache bash curl dumb-init python3
 RUN apk --update upgrade --no-cache
 
 RUN mkdir -p /opt/amnezia
@@ -1887,6 +1897,10 @@ PORT="${AWG_SERVER_PORT:-51820}"
 
 if [[ ! -c /dev/net/tun ]]; then
   echo "/dev/net/tun is not available on this host. AWG userspace runtime cannot start." >&2
+  exit 1
+fi
+if lsmod | grep -q '^amneziawg '; then
+  echo "Host kernel module amneziawg is loaded. Refusing to start AWG userspace runtime on a dirty host." >&2
   exit 1
 fi
 
