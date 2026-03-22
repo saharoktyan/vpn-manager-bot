@@ -10,6 +10,7 @@ from db.sqlite_db import SQLiteDB
 from services.app_settings import is_global_telemetry_enabled
 from services.awg import extract_client_public_key, list_awg_peer_transfers
 from services.server_registry import list_servers
+from services.xray import list_xray_user_transfers
 
 
 log = logging.getLogger("traffic_usage")
@@ -119,6 +120,66 @@ def _collect_awg_server_samples(server_key: str) -> tuple[int, str]:
     return 0, f"server={server_key}\nsamples={collected}"
 
 
+def _collect_xray_server_samples(server_key: str) -> tuple[int, str]:
+    if not is_global_telemetry_enabled():
+        return 0, "telemetry disabled globally"
+    code, records, raw = list_xray_user_transfers(server_key)
+    if code != 0:
+        return code, raw
+
+    stats_by_name = {
+        str(item.get("name") or ""): item
+        for item in records
+        if str(item.get("name") or "")
+    }
+    sampled_at = _now_iso()
+    collected = 0
+
+    with _db.transaction() as conn:
+        rows = conn.execute(
+            """
+            SELECT DISTINCT ps.profile_name, xp.uuid
+            FROM profile_server_state ps
+            JOIN xray_profiles xp ON xp.profile_name = ps.profile_name
+            JOIN telegram_users tu ON tu.profile_name = ps.profile_name
+            WHERE ps.server_key = ?
+              AND ps.protocol_kind = 'xray'
+              AND ps.desired_enabled = 1
+              AND tu.telemetry_enabled = 1
+            ORDER BY ps.profile_name
+            """,
+            (server_key,),
+        ).fetchall()
+
+        for row in rows:
+            profile_name = str(row["profile_name"] or "")
+            uuid_val = str(row["uuid"] or "")
+            if not profile_name:
+                continue
+            item = stats_by_name.get(profile_name)
+            if not item:
+                continue
+            conn.execute(
+                """
+                INSERT INTO traffic_samples(
+                    profile_name, server_key, protocol_kind, remote_id,
+                    rx_bytes_total, tx_bytes_total, sampled_at
+                ) VALUES (?, ?, 'xray', ?, ?, ?, ?)
+                """,
+                (
+                    profile_name,
+                    server_key,
+                    uuid_val or profile_name,
+                    int(item.get("downlink_bytes_total") or 0),
+                    int(item.get("uplink_bytes_total") or 0),
+                    sampled_at,
+                ),
+            )
+            collected += 1
+
+    return 0, f"server={server_key}\nsamples={collected}"
+
+
 def collect_awg_traffic_samples() -> tuple[int, str]:
     if not is_global_telemetry_enabled():
         return 0, "telemetry disabled globally"
@@ -137,8 +198,29 @@ def collect_awg_traffic_samples() -> tuple[int, str]:
     return (1 if errors else 0), "\n\n".join(blocks) if blocks else "no awg servers to sample"
 
 
+def collect_xray_traffic_samples() -> tuple[int, str]:
+    if not is_global_telemetry_enabled():
+        return 0, "telemetry disabled globally"
+    blocks: list[str] = []
+    errors = 0
+    for server in list_servers():
+        if "xray" not in server.protocol_kinds:
+            continue
+        if server.bootstrap_state != "bootstrapped":
+            continue
+        code, out = _collect_xray_server_samples(server.key)
+        blocks.append(out)
+        if code != 0:
+            errors += 1
+            log.warning("Xray traffic sampling failed for %s: %s", server.key, out)
+    return (1 if errors else 0), "\n\n".join(blocks) if blocks else "no xray servers to sample"
+
+
 def collect_traffic_job(_context: Any) -> None:
-    code, out = collect_awg_traffic_samples()
+    awg_code, awg_out = collect_awg_traffic_samples()
+    xray_code, xray_out = collect_xray_traffic_samples()
+    code = 1 if awg_code or xray_code else 0
+    out = f"[AWG]\n{awg_out}\n\n[Xray]\n{xray_out}"
     if code != 0:
         log.warning("Traffic sampling finished with errors:\n%s", out)
     else:

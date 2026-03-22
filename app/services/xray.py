@@ -7,12 +7,14 @@ import uuid as uuid_lib
 from typing import Any, List, Optional, Tuple
 from urllib.parse import quote
 
+from services.server_bootstrap import XRAY_ENABLE_STATS_SCRIPT, XRAY_TRAFFIC_SCRIPT
 from services.server_registry import get_server, list_servers
-from services.server_runtime import run_local_command, run_server_command
+from services.server_runtime import run_local_command, run_server_command, write_server_file
 
 log = logging.getLogger("xray")
 
 _cache: dict[str, dict[str, object]] = {}
+_telemetry_ready: set[str] = set()
 
 
 def run_local(cmd: str, timeout: int = 60) -> Tuple[int, str]:
@@ -108,6 +110,48 @@ def list_user_records(server_key: Optional[str] = None) -> Tuple[int, List[dict[
         elif parts:
             items.append({"name": parts[0], "uuid": None})
     return 0, items, out
+
+
+def ensure_xray_telemetry(server_key: str) -> Tuple[int, str]:
+    if server_key in _telemetry_ready:
+        return 0, "ok"
+    server = get_server(server_key)
+    if not server:
+        return 1, f"Server {server_key} not found"
+    for path, content in (
+        ("/opt/vpn-manager-node/xray-enable-stats.sh", XRAY_ENABLE_STATS_SCRIPT),
+        ("/opt/vpn-manager-node/xray-list-traffic.sh", XRAY_TRAFFIC_SCRIPT),
+    ):
+        code, out = write_server_file(server, path, content, mode="0755")
+        if code != 0:
+            return code, out
+    code, out = run_server_command(server, "/opt/vpn-manager-node/xray-enable-stats.sh", timeout=120)
+    if code == 0:
+        _telemetry_ready.add(server_key)
+    return code, out
+
+
+def list_xray_user_transfers(server_key: str) -> Tuple[int, List[dict[str, Any]], str]:
+    server = get_server(server_key)
+    if not server:
+        return 1, [], f"Server {server_key} not found"
+
+    code, _out = ensure_xray_telemetry(server_key)
+    if code != 0:
+        return code, [], _out
+
+    code, out = run_server_command(server, "/opt/vpn-manager-node/xray-list-traffic.sh", timeout=120)
+    if code != 0:
+        return code, [], out
+    try:
+        import json
+
+        items = json.loads(out.strip() or "[]")
+    except Exception:
+        return 1, [], f"Could not parse xray traffic output:\n{out[-1500:]}"
+    if not isinstance(items, list):
+        return 1, [], f"Unexpected xray traffic payload:\n{out[-1500:]}"
+    return 0, [item for item in items if isinstance(item, dict)], out
 
 
 def list_users_cached(server_key: str, ttl: float = 3.0) -> Tuple[int, List[str], str]:

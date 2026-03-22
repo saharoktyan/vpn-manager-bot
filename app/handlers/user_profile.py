@@ -702,8 +702,13 @@ def on_menu_callback(update: Update, context: CallbackContext, payload: str) -> 
         if is_global_telemetry_enabled():
             if _user_telemetry_enabled(user.id):
                 awg_usage = get_profile_monthly_usage(name, "awg")
+                xray_usage = get_profile_monthly_usage(name, "xray")
                 awg_usage_txt = _format_bytes(int(awg_usage["total_bytes"]))
-                telemetry_line = t(lang, "profile.awg_traffic", value=awg_usage_txt)
+                xray_usage_txt = _format_bytes(int(xray_usage["total_bytes"]))
+                telemetry_line = (
+                    f"{t(lang, 'profile.awg_traffic', value=awg_usage_txt)}\n"
+                    f"{t(lang, 'profile.xray_traffic', value=xray_usage_txt)}"
+                )
             else:
                 telemetry_line = t(lang, "profile.telemetry_disabled_user")
             traffic_block = f"{t(lang, 'profile.traffic')}\n{telemetry_line}\n\n"
