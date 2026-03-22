@@ -570,6 +570,10 @@ def on_server_callback(update: Update, context: CallbackContext, payload: str) -
 
     w = _wizard_get(context)
     if payload == "cancel":
+        if not w:
+            sent = update.callback_query.message
+            w = _wizard_init(sent, "menu")
+            w["locale"] = lang
         servers = list_servers(include_disabled=True)
         w["step"] = "menu"
         _wizard_set(context, w)
@@ -583,6 +587,10 @@ def on_server_callback(update: Update, context: CallbackContext, payload: str) -
     lang = _wizard_lang(context)
 
     if payload == "list":
+        if not w:
+            sent = update.callback_query.message
+            w = _wizard_init(sent, "menu")
+            w["locale"] = lang
         servers = list_servers(include_disabled=True)
         w["step"] = "menu"
         _wizard_set(context, w)
