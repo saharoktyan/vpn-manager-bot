@@ -1666,9 +1666,81 @@ set -euo pipefail
 IFACE="${AWG_IFACE:-wg0}"
 CFG="${AWG_CONFIG_FILE:-/opt/amnezia/awg/wg0.conf}"
 NETWORK="${AWG_NETWORK:-10.8.1.0/24}"
-LISTEN_PORT="${AWG_LISTEN_PORT:-51820}"
-export WG_QUICK_USERSPACE_IMPLEMENTATION="${WG_QUICK_USERSPACE_IMPLEMENTATION:-amneziawg-go}"
+GO_IMPL="${WG_QUICK_USERSPACE_IMPLEMENTATION:-amneziawg-go}"
+GO_PID=""
 PUB_IFACE="$(ip route get 1.1.1.1 | awk '/dev/ {for (i=1;i<=NF;i++) if ($i==\"dev\") {print $(i+1); exit}}')"
+
+require_cmd() {
+  command -v "$1" >/dev/null 2>&1 || {
+    echo "Required command not found: $1" >&2
+    exit 1
+  }
+}
+
+conf_value() {
+  local key="$1"
+  awk -F' = ' -v key="$key" '$1 == key {print $2; exit}' "$CFG"
+}
+
+strip_conf() {
+  python3 - "$CFG" <<'PY'
+import sys
+
+cfg = sys.argv[1]
+allowed_interface = {
+    "PrivateKey",
+    "ListenPort",
+    "FwMark",
+    "Jc",
+    "Jmin",
+    "Jmax",
+    "S1",
+    "S2",
+    "S3",
+    "S4",
+    "H1",
+    "H2",
+    "H3",
+    "H4",
+    "I1",
+    "I2",
+    "I3",
+    "I4",
+    "I5",
+}
+allowed_peer = {
+    "PublicKey",
+    "PresharedKey",
+    "AllowedIPs",
+    "Endpoint",
+    "PersistentKeepalive",
+}
+
+section = None
+with open(cfg, "r", encoding="utf-8", errors="ignore") as fh:
+    for raw in fh:
+        line = raw.rstrip("\n")
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        if stripped == "[Interface]":
+            section = "interface"
+            print("[Interface]")
+            continue
+        if stripped == "[Peer]":
+            section = "peer"
+            print("")
+            print("[Peer]")
+            continue
+        if " = " not in stripped or section is None:
+            continue
+        key, _ = stripped.split(" = ", 1)
+        if section == "interface" and key in allowed_interface:
+            print(stripped)
+        elif section == "peer" and key in allowed_peer:
+            print(stripped)
+PY
+}
 
 setup_nat() {
   if [[ -n "$PUB_IFACE" ]]; then
@@ -1689,10 +1761,10 @@ cleanup_nat() {
 
 cleanup() {
   cleanup_nat
-  if command -v awg-quick >/dev/null 2>&1; then
-    awg-quick down "$CFG" >/dev/null 2>&1 || true
-  elif command -v wg-quick >/dev/null 2>&1; then
-    wg-quick down "$CFG" >/dev/null 2>&1 || true
+  ip link del "$IFACE" >/dev/null 2>&1 || true
+  if [[ -n "$GO_PID" ]]; then
+    kill "$GO_PID" >/dev/null 2>&1 || true
+    wait "$GO_PID" >/dev/null 2>&1 || true
   fi
 }
 
@@ -1704,18 +1776,38 @@ if [[ ! -f "$CFG" ]]; then
   exit 0
 fi
 
+require_cmd "$GO_IMPL"
+require_cmd wg
+require_cmd ip
+
+ADDR="$(conf_value "Address")"
+MTU="$(conf_value "MTU")"
+[[ -n "$MTU" ]] || MTU="1280"
+
 sysctl -w net.ipv4.ip_forward=1 >/dev/null 2>&1 || true
 ip link del "$IFACE" >/dev/null 2>&1 || true
 
-if command -v awg-quick >/dev/null 2>&1; then
-  awg-quick up "$CFG"
-elif command -v wg-quick >/dev/null 2>&1; then
-  wg-quick up "$CFG"
-else
-  echo "Neither awg-quick nor wg-quick found in container" >&2
-  tail -f /dev/null
+"$GO_IMPL" "$IFACE" &
+GO_PID="$!"
+
+for _ in $(seq 1 50); do
+  if ip link show "$IFACE" >/dev/null 2>&1; then
+    break
+  fi
+  sleep 0.1
+done
+
+if ! ip link show "$IFACE" >/dev/null 2>&1; then
+  echo "Userspace AWG interface did not appear: $IFACE" >&2
   exit 1
 fi
+
+strip_conf | wg setconf "$IFACE" /dev/stdin
+
+if [[ -n "$ADDR" ]]; then
+  ip address add "$ADDR" dev "$IFACE"
+fi
+ip link set mtu "$MTU" up dev "$IFACE"
 
 setup_nat
 
