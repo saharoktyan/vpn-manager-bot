@@ -35,7 +35,22 @@ For AWG nodes, the bot builds and deploys its own wrapper image on the target ho
 
 ```bash
 cp .env.example .env
+```
+
+Run either:
+
+```bash
 docker compose up -d --build
+```
+
+or:
+
+```bash
+python3 -m venv .venv
+. .venv/bin/activate
+pip install -r requirements.txt
+.venv/bin/python app/manage_db.py init
+.venv/bin/python app/main.py
 ```
 
 Then:
@@ -48,7 +63,7 @@ Then:
 
 ## Docs
 
-- [`INSTALL.md`](/home/saharoktyan/projects/vpn-bot-public/INSTALL.md) — first-time setup and deployment
+- [`INSTALL.md`](/home/saharoktyan/projects/vpn-bot-public/INSTALL.md) — first-time setup, Docker, and systemd deployment
 
 ## Runtime Layout
 
