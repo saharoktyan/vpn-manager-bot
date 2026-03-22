@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import secrets
 import shlex
 import uuid as uuid_lib
 from typing import Any, List, Optional, Tuple
@@ -53,7 +54,28 @@ def get_uuid_local(name: str) -> Optional[str]:
     return str(uuid_val) if isinstance(uuid_val, str) and uuid_val.strip() else None
 
 
-def add_user(name: str, server_key: Optional[str] = None, uuid_value: Optional[str] = None) -> Tuple[int, str]:
+def get_short_id_local(name: str) -> Optional[str]:
+    from services.subscriptions import get_profile
+
+    rec = get_profile(name)
+    xray = rec.get("xray") if isinstance(rec, dict) else None
+    if isinstance(xray, dict):
+        short_id = xray.get("short_id")
+        if isinstance(short_id, str) and short_id.strip():
+            return short_id.strip()
+    return None
+
+
+def generate_short_id() -> str:
+    return secrets.token_hex(8)
+
+
+def add_user(
+    name: str,
+    server_key: Optional[str] = None,
+    uuid_value: Optional[str] = None,
+    short_id: Optional[str] = None,
+) -> Tuple[int, str]:
     server_key = server_key or _default_xray_server_key()
     if not server_key:
         return 1, "No Xray servers are registered"
@@ -63,6 +85,8 @@ def add_user(name: str, server_key: Optional[str] = None, uuid_value: Optional[s
 
     if uuid_value:
         cmd = f"/opt/vpn-manager-node/xray-add-user-existing.sh {shlex.quote(name)} {shlex.quote(uuid_value)}"
+        if short_id:
+            cmd += f" {shlex.quote(short_id)}"
     else:
         cmd = f"echo {shlex.quote(name)} | /opt/vpn-manager-node/xray-add-user.sh"
     return run_server_command(server, cmd, timeout=120)
@@ -181,15 +205,16 @@ def get_uuid_by_name(name: str, server_key: Optional[str] = None) -> Optional[st
     return None
 
 
-def ensure_user(name: str, server_key: str, uuid_value: Optional[str] = None) -> Tuple[int, str, Optional[str]]:
+def ensure_user(name: str, server_key: str, uuid_value: Optional[str] = None) -> Tuple[int, str, Optional[str], Optional[str]]:
     uuid_value = uuid_value or get_uuid_local(name) or str(uuid_lib.uuid4())
-    code, out = add_user(name, server_key=server_key, uuid_value=uuid_value)
+    short_id = get_short_id_local(name) or generate_short_id()
+    code, out = add_user(name, server_key=server_key, uuid_value=uuid_value, short_id=short_id)
     if code != 0:
         lower_out = (out or "").lower()
         if "already exists" in lower_out or "exists" in lower_out or "duplicate" in lower_out:
-            return 0, out, uuid_value
-        return code, out, None
-    return 0, out, uuid_value
+            return 0, out, uuid_value, short_id
+        return code, out, None, None
+    return 0, out, uuid_value, short_id
 
 
 def delete_user(name: str, server_key: Optional[str] = None) -> Tuple[int, str]:
@@ -212,7 +237,7 @@ def build_vless_link_transport(name: str, uuid: str, transport: str, server_key:
     if not ready:
         raise ValueError(reason)
 
-    short_id = server.xray_short_id or server.xray_sid
+    short_id = get_short_id_local(name) or server.xray_short_id or server.xray_sid
     path_prefix = server.xray_xhttp_path_prefix or "/assets"
 
     if transport == "xhttp":
@@ -225,7 +250,7 @@ def build_vless_link_transport(name: str, uuid: str, transport: str, server_key:
             f"&sni={server.xray_sni}"
             f"&fp={server.xray_fp}"
             f"&pbk={server.xray_pbk}"
-            f"&sid={server.xray_sid}"
+            f"&sid={short_id}"
             f"&type=xhttp"
             f"&path={path}"
             f"#reality-{server.key}-{name}-xhttp"
@@ -238,7 +263,7 @@ def build_vless_link_transport(name: str, uuid: str, transport: str, server_key:
         f"&sni={server.xray_sni}"
         f"&fp={server.xray_fp}"
         f"&pbk={server.xray_pbk}"
-        f"&sid={server.xray_sid}"
+        f"&sid={short_id}"
         f"&type=tcp"
         f"&flow={server.xray_flow}"
         f"#reality-{server.key}-{name}-tcp"

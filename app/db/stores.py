@@ -24,6 +24,7 @@ class SQLiteSubscriptionsStore:
                     s.warned_before_exp,
                     x.uuid,
                     x.enabled AS xray_enabled,
+                    x.short_id,
                     x.default_transport
                 FROM profiles p
                 LEFT JOIN subscriptions s ON s.profile_name = p.name
@@ -55,6 +56,7 @@ class SQLiteSubscriptionsStore:
                     rec["xray"] = {
                         "enabled": bool(row["xray_enabled"]) if row["xray_enabled"] is not None else True,
                         "transports": transports or ["tcp", "xhttp"],
+                        "short_id": row["short_id"] or "",
                         "default": row["default_transport"] or "xhttp",
                     }
                 access_codes = [
@@ -130,18 +132,20 @@ class SQLiteSubscriptionsStore:
                     transports = ["xhttp", "tcp"]
                     default_transport = "xhttp"
                     enabled = True
+                    short_id = None
                     if isinstance(xray, dict):
                         raw_transports = xray.get("transports")
                         if isinstance(raw_transports, list) and raw_transports:
                             transports = [str(item) for item in raw_transports]
                         default_transport = str(xray.get("default") or default_transport)
                         enabled = bool(xray.get("enabled", True))
+                        short_id = xray.get("short_id")
                     conn.execute(
                         """
-                        INSERT INTO xray_profiles(profile_name, uuid, enabled, default_transport)
-                        VALUES (?, ?, ?, ?)
+                        INSERT INTO xray_profiles(profile_name, uuid, enabled, short_id, default_transport)
+                        VALUES (?, ?, ?, ?, ?)
                         """,
-                        (name, uuid_val, 1 if enabled else 0, default_transport),
+                        (name, uuid_val, 1 if enabled else 0, short_id, default_transport),
                     )
                     for transport in sorted(set(transports)):
                         conn.execute(

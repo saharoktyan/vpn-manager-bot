@@ -175,10 +175,27 @@ def ensure_xray_caps(name: str, uuid_val: str) -> None:
         x.setdefault("enabled", True)
         x.setdefault("transports", ["xhttp", "tcp"])
         x.setdefault("default", "xhttp")
+        x.setdefault("short_id", "")
         rec["xray"] = x
 
         s[name] = rec
         return s
+    subs_store.update(mut)
+
+
+def set_xray_short_id(name: str, short_id: str) -> None:
+    def mut(s: Dict[str, Any]) -> Dict[str, Any]:
+        rec = s.get(name)
+        if not isinstance(rec, dict):
+            rec = {}
+        x = rec.get("xray")
+        if not isinstance(x, dict):
+            x = {}
+        x["short_id"] = short_id
+        rec["xray"] = x
+        s[name] = rec
+        return s
+
     subs_store.update(mut)
 
 

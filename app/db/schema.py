@@ -42,6 +42,7 @@ BASE_DDL: Iterable[str] = (
         profile_name TEXT PRIMARY KEY,
         uuid TEXT,
         enabled INTEGER NOT NULL DEFAULT 1,
+        short_id TEXT,
         default_transport TEXT,
         FOREIGN KEY (profile_name) REFERENCES profiles(name) ON DELETE CASCADE
     )
@@ -197,6 +198,12 @@ def _migrate_telegram_users_table(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE telegram_users ADD COLUMN notify_access_requests INTEGER NOT NULL DEFAULT 1")
     if columns and "telemetry_enabled" not in columns:
         conn.execute("ALTER TABLE telegram_users ADD COLUMN telemetry_enabled INTEGER NOT NULL DEFAULT 0")
+
+
+def _migrate_xray_profiles_table(conn: sqlite3.Connection) -> None:
+    columns = _table_columns(conn, "xray_profiles")
+    if columns and "short_id" not in columns:
+        conn.execute("ALTER TABLE xray_profiles ADD COLUMN short_id TEXT")
 
 
 def _migrate_servers_table(conn: sqlite3.Connection) -> None:
@@ -409,6 +416,7 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
     for ddl in BASE_DDL:
         conn.execute(ddl)
     _migrate_telegram_users_table(conn)
+    _migrate_xray_profiles_table(conn)
     _migrate_servers_table(conn)
     _migrate_awg_table(conn)
     _migrate_profile_server_state_table(conn)

@@ -123,19 +123,21 @@ def migrate(sqlite_path: str = SQLITE_DB_PATH) -> MigrationStats:
                 transports = ["xhttp", "tcp"]
                 default_transport = "xhttp"
                 enabled = 1
+                short_id = None
                 if isinstance(xray, dict):
                     raw_transports = xray.get("transports")
                     if isinstance(raw_transports, list) and raw_transports:
                         transports = [str(item) for item in raw_transports]
                     default_transport = str(xray.get("default") or default_transport)
                     enabled = 1 if xray.get("enabled", True) else 0
+                    short_id = xray.get("short_id")
 
                 conn.execute(
                     """
-                    INSERT INTO xray_profiles(profile_name, uuid, enabled, default_transport)
-                    VALUES (?, ?, ?, ?)
+                    INSERT INTO xray_profiles(profile_name, uuid, enabled, short_id, default_transport)
+                    VALUES (?, ?, ?, ?, ?)
                     """,
-                    (name, uuid_val, enabled, default_transport),
+                    (name, uuid_val, enabled, short_id, default_transport),
                 )
                 stats.xray_profiles += 1
 

@@ -130,11 +130,40 @@ PY
   exit 1
 }
 
+SHORT_ID="$(python3 - <<'PY'
+import secrets
+print(secrets.token_hex(8))
+PY
+)"
+
+python3 - <<PY
+import json
+
+cfg_path="$CONFIG"
+tmp_path="$tmp.shortid"
+short_id="$SHORT_ID"
+j=json.load(open(cfg_path, "r", encoding="utf-8"))
+
+for ib in j.get("inbounds", []):
+    stream = ib.get("streamSettings", {}) or {}
+    reality = stream.get("realitySettings", {}) or {}
+    short_ids = list(reality.get("shortIds") or [])
+    if short_id not in short_ids:
+        short_ids.append(short_id)
+        reality["shortIds"] = short_ids
+
+with open(tmp_path, "w", encoding="utf-8") as f:
+    json.dump(j, f, ensure_ascii=False, indent=2)
+PY
+
+python3 -m json.tool "$tmp.shortid" >/dev/null
+mv "$tmp.shortid" "$tmp"
+
 python3 -m json.tool "$tmp" >/dev/null
 cp -a "$CONFIG" "${CONFIG}.bak.$(date +%Y%m%d-%H%M%S)"
 mv "$tmp" "$CONFIG"
 docker_cmd restart "$CONTAINER" >/dev/null 2>&1 || true
-echo "$UUID"
+echo "$UUID $SHORT_ID"
 """
 
 
@@ -160,13 +189,14 @@ docker_cmd() {
   exit 1
 }
 
-if [[ $# -ne 2 ]]; then
-  echo "Usage: $0 <name> <uuid>" >&2
+if [[ $# -lt 2 || $# -gt 3 ]]; then
+  echo "Usage: $0 <name> <uuid> [short_id]" >&2
   exit 1
 fi
 
 TAG="$1"
 UUID="$2"
+SHORT_ID="${3:-}"
 tmp="$(mktemp)"
 
 python3 - <<PY
@@ -207,6 +237,12 @@ for ib in j.get("inbounds", []):
     elif tag==xhttp_tag:
         ensure_client(ib, flow=None)
         found_xhttp=True
+    stream = ib.get("streamSettings", {}) or {}
+    reality = stream.get("realitySettings", {}) or {}
+    short_ids = list(reality.get("shortIds") or [])
+    if short_id and short_id not in short_ids:
+        short_ids.append(short_id)
+        reality["shortIds"] = short_ids
 
 if not found_tcp or not found_xhttp:
     raise SystemExit(f"Не найдены нужные inbound tags. tcp={found_tcp}, xhttp={found_xhttp}")

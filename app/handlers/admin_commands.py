@@ -31,8 +31,9 @@ def add_cmd(update: Update, context: CallbackContext) -> None:
     uuid_val = str(uuid_lib.uuid4())
 
     update.effective_message.reply_text(t(lang, "admin.cmd.add_creating", name=name))
-    code, out = xray_svc.add_user(name, uuid_value=uuid_val)
-    if code != 0:
+    default_server_key = next((server.key for server in list_servers() if server.enabled and "xray" in server.protocol_kinds), "")
+    code, out, ensured_uuid, ensured_short_id = xray_svc.ensure_user(name, default_server_key, uuid_value=uuid_val)
+    if code != 0 or not ensured_uuid:
         update.effective_message.reply_text(
             t(lang, "admin.cmd.error", output=out[-1500:]),
             parse_mode=PARSE_MODE,
@@ -40,9 +41,13 @@ def add_cmd(update: Update, context: CallbackContext) -> None:
         )
         return
 
-    ensure_xray_caps(name, uuid_val)
+    ensure_xray_caps(name, ensured_uuid)
+    if ensured_short_id:
+        from services.subscriptions import set_xray_short_id
+
+        set_xray_short_id(name, ensured_short_id)
     update.effective_message.reply_text(
-        t(lang, "admin.cmd.ready_name_uuid", name=name, uuid=uuid_val),
+        t(lang, "admin.cmd.ready_name_uuid", name=name, uuid=ensured_uuid),
         parse_mode=PARSE_MODE,
         reply_markup=kb_back_menu(lang),
     )
@@ -216,6 +221,7 @@ def setxrayserver_cmd(update: Update, context: CallbackContext) -> None:
     tcp_port = int(parts[7]) if len(parts) >= 8 else 443
     xhttp_port = int(parts[8]) if len(parts) >= 9 else 8443
     path_prefix = parts[9] if len(parts) >= 10 else "/assets"
+    fp = parts[10] if len(parts) >= 11 else "chrome"
 
     server = update_server_fields(
         key,
@@ -224,6 +230,7 @@ def setxrayserver_cmd(update: Update, context: CallbackContext) -> None:
         xray_pbk=pbk,
         xray_sid=sid,
         xray_short_id=short_id,
+        xray_fp=fp,
         xray_tcp_port=tcp_port,
         xray_xhttp_port=xhttp_port,
         xray_xhttp_path_prefix=path_prefix,

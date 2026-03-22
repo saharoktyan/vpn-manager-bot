@@ -291,6 +291,7 @@ def _server_card_text(server: RegisteredServer, lang: str) -> str:
         f"xray: {xray_icon} {xray_text}",
         f"xray_host: {server.xray_host or '—'}",
         f"xray_sni: {server.xray_sni or '—'}",
+        f"xray_fp: {server.xray_fp or '—'}",
         f"xray_sid: {server.xray_sid or '—'}",
         f"xray ports: {server.xray_tcp_port} / {server.xray_xhttp_port}",
         "",
@@ -334,6 +335,8 @@ def _server_edit_menu_text(data: Dict[str, Any], lang: str) -> str:
     target = data["target"] or "—"
     public_host = data["public_host"] or "—"
     notes = data.get("notes") or "—"
+    xray_sni = data.get("xray_sni") or "—"
+    xray_fp = data.get("xray_fp") or "—"
     awg_i1_preset = data.get("awg_i1_preset") or "quic"
     if lang == "ru":
         return (
@@ -345,6 +348,8 @@ def _server_edit_menu_text(data: Dict[str, Any], lang: str) -> str:
             f"target: `{target}`\n"
             f"public_host: `{public_host}`\n"
             f"protocols: `{protocols}`\n"
+            f"xray_sni: `{xray_sni}`\n"
+            f"xray_fp: `{xray_fp}`\n"
             f"awg_i1_preset: `{awg_i1_preset}`\n"
             f"notes: `{notes}`\n\n"
             "Выбери поле для изменения или сохрани изменения."
@@ -358,6 +363,8 @@ def _server_edit_menu_text(data: Dict[str, Any], lang: str) -> str:
         f"target: `{target}`\n"
         f"public_host: `{public_host}`\n"
         f"protocols: `{protocols}`\n"
+        f"xray_sni: `{xray_sni}`\n"
+        f"xray_fp: `{xray_fp}`\n"
         f"awg_i1_preset: `{awg_i1_preset}`\n"
         f"notes: `{notes}`\n\n"
         "Choose a field to edit or save the changes."
@@ -372,6 +379,8 @@ def _server_edit_menu_markup(server_key: str, lang: str) -> InlineKeyboardMarkup
     target = "Target"
     public_host = "Public host"
     protocols = "Протоколы" if lang == "ru" else "Protocols"
+    xray_sni = "Xray dest/SNI"
+    xray_fp = "Xray uTLS fp"
     awg_preset = "AWG маскировка" if lang == "ru" else "AWG preset"
     notes = "Заметки" if lang == "ru" else "Notes"
     save = "💾 Сохранить" if lang == "ru" else "💾 Save"
@@ -382,6 +391,7 @@ def _server_edit_menu_markup(server_key: str, lang: str) -> InlineKeyboardMarkup
             [InlineKeyboardButton(region, callback_data=f"{CB_SRV}editfield:region"), InlineKeyboardButton(transport, callback_data=f"{CB_SRV}editfield:transport")],
             [InlineKeyboardButton(target, callback_data=f"{CB_SRV}editfield:target"), InlineKeyboardButton(public_host, callback_data=f"{CB_SRV}editfield:public_host")],
             [InlineKeyboardButton(protocols, callback_data=f"{CB_SRV}editfield:protocols"), InlineKeyboardButton(awg_preset, callback_data=f"{CB_SRV}editfield:awg_i1_preset")],
+            [InlineKeyboardButton(xray_sni, callback_data=f"{CB_SRV}editfield:xray_sni"), InlineKeyboardButton(xray_fp, callback_data=f"{CB_SRV}editfield:xray_fp")],
             [InlineKeyboardButton(notes, callback_data=f"{CB_SRV}editfield:notes")],
             [InlineKeyboardButton(save, callback_data=f"{CB_SRV}editsave")],
             [InlineKeyboardButton(back, callback_data=f"{CB_SRV}card:{server_key}")],
@@ -409,6 +419,8 @@ def _summary_text(data: Dict[str, Any], editing: bool = False, lang: str = "ru")
     protocols = ", ".join(sorted(data["protocol_kinds"])) or "—"
     target = data["target"] or "—"
     public_host = data["public_host"] or "—"
+    xray_sni = data.get("xray_sni") or "—"
+    xray_fp = data.get("xray_fp") or "—"
     awg_i1_preset = data.get("awg_i1_preset") or "quic"
     action = ("Изменение" if editing else "Создание") if lang == "ru" else ("Editing" if editing else "Creating")
     return (
@@ -421,6 +433,8 @@ def _summary_text(data: Dict[str, Any], editing: bool = False, lang: str = "ru")
         f"target: {_md(target)}\n"
         f"public_host: {_md(public_host)}\n"
         f"protocols: {_md(protocols)}\n"
+        f"xray_sni: {_md(xray_sni)}\n"
+        f"xray_fp: {_md(xray_fp)}\n"
         f"awg_i1_preset: {_md(awg_i1_preset)}\n\n"
         + ("\n\nПодтвердить?" if lang == "ru" else "\n\nConfirm?")
     )
@@ -581,6 +595,8 @@ def _load_server_into_data(server: RegisteredServer) -> Dict[str, Any]:
         "public_host": server.public_host or "",
         "notes": server.notes or "",
         "protocol_kinds": set(server.protocol_kinds),
+        "xray_sni": server.xray_sni or "",
+        "xray_fp": server.xray_fp or "chrome",
         "awg_i1_preset": server.awg_i1_preset or "quic",
     }
 
@@ -1006,6 +1022,8 @@ def on_server_callback(update: Update, context: CallbackContext, payload: str) -
             "region": t(lang, "admin.wizard.server_create_region"),
             "target": t(lang, "admin.wizard.server_enter_target"),
             "public_host": t(lang, "admin.wizard.server_enter_public_host"),
+            "xray_sni": "Введи Xray dest/SNI. Например: `www.cloudflare.com`" if lang == "ru" else "Enter Xray dest/SNI. Example: `www.cloudflare.com`",
+            "xray_fp": "Введи Xray uTLS fingerprint. Например: `chrome`" if lang == "ru" else "Enter the Xray uTLS fingerprint. Example: `chrome`",
         }
         if field in field_prompts:
             w["step"] = field
@@ -1023,6 +1041,8 @@ def on_server_callback(update: Update, context: CallbackContext, payload: str) -
             public_host=data["public_host"] or (data["target"].split("@")[-1] if data["target"] else ""),
             ssh_host=data["target"] or None,
             protocol_kinds=sorted(data["protocol_kinds"]),
+            xray_sni=data.get("xray_sni") or "",
+            xray_fp=data.get("xray_fp") or "chrome",
             notes=data.get("notes") or "",
             awg_i1_preset=data.get("awg_i1_preset") or "quic",
             bootstrap_state="edited",
@@ -1051,6 +1071,12 @@ def on_server_callback(update: Update, context: CallbackContext, payload: str) -
         )
         if (data.get("awg_i1_preset") or "quic") != "quic":
             server = update_server_fields(server.key, awg_i1_preset=data.get("awg_i1_preset") or "quic")
+        if data.get("xray_sni") or data.get("xray_fp"):
+            server = update_server_fields(
+                server.key,
+                xray_sni=data.get("xray_sni") or "",
+                xray_fp=data.get("xray_fp") or "chrome",
+            )
         servers = list_servers(include_disabled=True)
         w["mode"] = "menu"
         w["step"] = "menu"

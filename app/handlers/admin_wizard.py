@@ -691,14 +691,17 @@ def _finish_create(context: CallbackContext) -> None:
     errors: List[str] = []
     xray_state_updates: List[tuple[str, str, Optional[str], Optional[str]]] = []
     uuid_val: Optional[str] = None
+    xray_short_id: Optional[str] = None
     xray_methods = [method for method in get_access_methods_for_codes(protocols) if method.protocol_kind == "xray"]
     for method in xray_methods:
-        code, out, ensured_uuid = xray_svc.ensure_user(name, method.server_key, uuid_value=uuid_val)
+        code, out, ensured_uuid, ensured_short_id = xray_svc.ensure_user(name, method.server_key, uuid_value=uuid_val)
         if code != 0 or not ensured_uuid:
             xray_state_updates.append(("failed", method.server_key, uuid_val, (out or "")[-500:] or "create failed"))
             errors.append(f"{method.label}: ошибка создания\n{(out or '')[-500:]}")
             continue
         uuid_val = ensured_uuid
+        if ensured_short_id:
+            xray_short_id = ensured_short_id
         ready, reason = xray_svc.get_server_link_status(method.server_key)
         if ready:
             xray_state_updates.append(("provisioned", method.server_key, ensured_uuid, None))
@@ -721,7 +724,7 @@ def _finish_create(context: CallbackContext) -> None:
     rec["protocols"] = sorted(protocols)
     if uuid_val:
         rec["uuid"] = uuid_val
-        rec["xray"] = {"enabled": True, "transports": ["xhttp", "tcp"], "default": "xhttp"}
+        rec["xray"] = {"enabled": True, "transports": ["xhttp", "tcp"], "default": "xhttp", "short_id": xray_short_id or ""}
     subs[name] = rec
     subs_store.write(subs)
     for status, server_key, remote_id, last_error in xray_state_updates:
@@ -806,8 +809,9 @@ def _save_edit(context: CallbackContext) -> None:
     existing_xray_server_keys = {method.server_key for method in existing_xray_methods}
 
     uuid_val = rec.get("uuid") if isinstance(rec, dict) else None
+    xray_short_id = None
     for method in selected_xray_methods:
-        code, out, ensured_uuid = xray_svc.ensure_user(name, method.server_key, uuid_value=uuid_val)
+        code, out, ensured_uuid, ensured_short_id = xray_svc.ensure_user(name, method.server_key, uuid_value=uuid_val)
         if code != 0 or not ensured_uuid:
             upsert_profile_server_state(
                 name,
@@ -820,6 +824,8 @@ def _save_edit(context: CallbackContext) -> None:
             errors.append(f"{method.label}: не удалось синхронизировать\n{(out or '')[-500:]}")
             continue
         uuid_val = ensured_uuid
+        if ensured_short_id:
+            xray_short_id = ensured_short_id
         ready, reason = xray_svc.get_server_link_status(method.server_key)
         if ready:
             upsert_profile_server_state(
@@ -844,7 +850,7 @@ def _save_edit(context: CallbackContext) -> None:
 
     if uuid_val:
         rec["uuid"] = uuid_val
-        rec["xray"] = {"enabled": True, "transports": ["xhttp", "tcp"], "default": "xhttp"}
+        rec["xray"] = {"enabled": True, "transports": ["xhttp", "tcp"], "default": "xhttp", "short_id": xray_short_id or xray_svc.get_short_id_local(name) or ""}
         ensure_xray_caps(name, uuid_val)
 
     for server_key in sorted(existing_xray_server_keys - selected_xray_server_keys):
