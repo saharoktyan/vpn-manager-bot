@@ -34,7 +34,7 @@ from ui.admin_views import (
     render_sub_keyboard,
 )
 from ui.menu import is_admin
-from utils.keyboards import kb_main_menu
+from utils.keyboards import kb_admin_menu, kb_main_menu
 from utils.tg import answer_cb, safe_delete_by_id, safe_delete_update_message, safe_edit_by_ids, safe_edit_message
 from i18n import get_locale_for_update, t
 
@@ -338,6 +338,35 @@ def on_cfg_callback(update: Update, context: CallbackContext, payload: str) -> N
     answer_cb(update)
     lang = get_locale_for_update(update)
 
+    if payload.startswith("quickedit:"):
+        name = payload.split(":", 1)[1]
+        msg = update.callback_query.message
+        w = _wizard_init(msg, "edit")
+        w["locale"] = lang
+        w["all_names"] = _get_all_names()
+        _wizard_set(context, w)
+        loaded = _load_profile_into_wizard(context, name)
+        if not loaded:
+            safe_edit_by_ids(
+                context.bot,
+                msg.chat_id,
+                msg.message_id,
+                t(lang, "admin.requests.profile_missing"),
+                reply_markup=kb_back_menu(lang),
+                parse_mode=PARSE_MODE,
+            )
+            return
+        loaded["step"] = "edit_menu"
+        _wizard_set(context, loaded)
+        safe_edit_by_ids(
+            context.bot,
+            msg.chat_id,
+            msg.message_id,
+            *_render_edit_menu(name, loaded["protocols"], loaded["sub_days"], frozen=is_frozen(name), lang=lang),
+            parse_mode=PARSE_MODE,
+        )
+        return
+
     if payload in ("start:create", "start:edit"):
         msg = update.callback_query.message
         if payload == "start:create":
@@ -367,13 +396,21 @@ def on_cfg_callback(update: Update, context: CallbackContext, payload: str) -> N
             update,
             context,
             f"*{MENU_TITLE}*\n\n{t(lang, 'menu.choose_action')}",
-            reply_markup=kb_main_menu(is_admin(update), lang),
+            reply_markup=kb_main_menu(is_admin(update), True, lang),
             parse_mode=PARSE_MODE,
         )
         return
 
     if payload == "cancel":
-        _wizard_close(context)
+        _wizard_clear(context)
+        if update.callback_query and update.callback_query.message:
+            safe_edit_message(
+                update,
+                context,
+                f"{t(lang, 'admin.menu_title')}\n\n{t(lang, 'menu.admin_choose')}",
+                reply_markup=kb_admin_menu(lang),
+                parse_mode=PARSE_MODE,
+            )
         return
 
     if payload == "search":

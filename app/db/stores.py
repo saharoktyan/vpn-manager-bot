@@ -150,7 +150,10 @@ class SQLiteTelegramUsersStore:
         with self.db.connect() as conn:
             rows = conn.execute(
                 """
-                SELECT telegram_user_id, chat_id, username, first_name, last_name, locale, updated_at, last_key_at, key_issued_count
+                SELECT telegram_user_id, chat_id, username, first_name, last_name, profile_name, locale,
+                       access_granted, access_request_pending, access_request_sent_at,
+                       notify_access_requests,
+                       updated_at, last_key_at, key_issued_count
                 FROM telegram_users
                 ORDER BY telegram_user_id
                 """
@@ -162,7 +165,12 @@ class SQLiteTelegramUsersStore:
                     "username": row["username"] or "",
                     "first_name": row["first_name"] or "",
                     "last_name": row["last_name"] or "",
+                    "profile_name": row["profile_name"],
                     "locale": row["locale"] or "ru",
+                    "access_granted": bool(row["access_granted"]) if row["access_granted"] is not None else False,
+                    "access_request_pending": bool(row["access_request_pending"]) if row["access_request_pending"] is not None else False,
+                    "access_request_sent_at": row["access_request_sent_at"],
+                    "notify_access_requests": bool(row["notify_access_requests"]) if row["notify_access_requests"] is not None else True,
                     "updated_at": row["updated_at"],
                     "last_key_at": row["last_key_at"],
                     "key_issued_count": int(row["key_issued_count"] or 0),
@@ -183,9 +191,11 @@ class SQLiteTelegramUsersStore:
                 conn.execute(
                     """
                     INSERT INTO telegram_users(
-                        telegram_user_id, chat_id, username, first_name, last_name,
-                        locale, updated_at, last_key_at, key_issued_count
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        telegram_user_id, chat_id, username, first_name, last_name, profile_name,
+                        locale, access_granted, access_request_pending, access_request_sent_at,
+                        notify_access_requests,
+                        updated_at, last_key_at, key_issued_count
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         telegram_user_id,
@@ -193,7 +203,12 @@ class SQLiteTelegramUsersStore:
                         rec.get("username"),
                         rec.get("first_name"),
                         rec.get("last_name"),
+                        rec.get("profile_name"),
                         rec.get("locale") or "ru",
+                        1 if rec.get("access_granted") else 0,
+                        1 if rec.get("access_request_pending") else 0,
+                        rec.get("access_request_sent_at"),
+                        1 if rec.get("notify_access_requests", True) else 0,
                         rec.get("updated_at"),
                         rec.get("last_key_at"),
                         int(rec.get("key_issued_count") or 0),

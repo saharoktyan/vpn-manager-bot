@@ -22,11 +22,13 @@ from .admin_server_wizard import (
     syncnodeenv_cmd,
 )
 from .admin_wizard import changecfg_cmd, cfg_wizard_text, createcfg_cmd, on_cfg_callback
+from .user_profile import admin_menu_text_router
 
 
 def admin_text_router(update, context) -> None:
     cfg_wizard_text(update, context)
     server_wizard_text(update, context)
+    admin_menu_text_router(update, context)
 
 __all__ = [
     "add_cmd",

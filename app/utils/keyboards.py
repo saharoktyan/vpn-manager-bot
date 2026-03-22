@@ -10,11 +10,15 @@ from domain.servers import get_access_methods_for_kind
 from i18n import t
 
 
-def kb_main_menu(is_admin: bool, lang: str = "ru") -> InlineKeyboardMarkup:
+def kb_main_menu(is_admin: bool, has_access: bool, lang: str = "ru") -> InlineKeyboardMarkup:
+    if not has_access:
+        return InlineKeyboardMarkup([
+            [InlineKeyboardButton(t(lang, "menu.request_access"), callback_data=f"{CB_MENU}request_access")]
+        ])
     rows = [
         [InlineKeyboardButton(t(lang, "menu.get_key"), callback_data=f"{CB_GETKEY}menu")],
         [InlineKeyboardButton(t(lang, "menu.profile"), callback_data=f"{CB_MENU}profile")],
-        [InlineKeyboardButton(t(lang, "menu.language"), callback_data=f"{CB_MENU}language")],
+        [InlineKeyboardButton(t(lang, "menu.settings"), callback_data=f"{CB_MENU}settings")],
     ]
     if is_admin:
         rows.append([InlineKeyboardButton(t(lang, "menu.admin"), callback_data=f"{CB_MENU}admin")])
@@ -26,8 +30,9 @@ def kb_admin_menu(lang: str = "ru") -> InlineKeyboardMarkup:
         [InlineKeyboardButton(t(lang, "menu.status"), callback_data=f"{CB_MENU}admin_status")],
         [InlineKeyboardButton(t(lang, "menu.profiles"), callback_data=f"{CB_CFG}start:edit")],
         [InlineKeyboardButton(t(lang, "menu.servers"), callback_data=f"{CB_SRV}menu")],
+        [InlineKeyboardButton(t(lang, "menu.requests"), callback_data=f"{CB_MENU}admin_requests")],
         [InlineKeyboardButton(t(lang, "menu.ssh_key"), callback_data=f"{CB_MENU}sshkey")],
-        [InlineKeyboardButton(t(lang, "menu.language"), callback_data=f"{CB_MENU}language")],
+        [InlineKeyboardButton(t(lang, "menu.admin_settings"), callback_data=f"{CB_MENU}admin_settings")],
         [InlineKeyboardButton(t(lang, "menu.back"), callback_data=f"{CB_MENU}main")],
     ])
 
@@ -141,5 +146,20 @@ def kb_language_menu(current_locale: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
         [InlineKeyboardButton(ru_label, callback_data=f"{CB_MENU}setlang:ru")],
         [InlineKeyboardButton(en_label, callback_data=f"{CB_MENU}setlang:en")],
-        [InlineKeyboardButton(t(current_locale, "menu.back"), callback_data=f"{CB_MENU}main")],
+        [InlineKeyboardButton(t(current_locale, "menu.back"), callback_data=f"{CB_MENU}settings")],
+    ])
+
+
+def kb_settings_menu(lang: str = "ru") -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton(t(lang, "menu.language"), callback_data=f"{CB_MENU}language")],
+        [InlineKeyboardButton(t(lang, "menu.back"), callback_data=f"{CB_MENU}main")],
+    ])
+
+
+def kb_admin_settings_menu(notify_enabled: bool, lang: str = "ru") -> InlineKeyboardMarkup:
+    label = t(lang, "admin.settings.notifications_on") if notify_enabled else t(lang, "admin.settings.notifications_off")
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton(label, callback_data=f"{CB_MENU}admin_settings_toggle_notify")],
+        [InlineKeyboardButton(t(lang, "menu.back"), callback_data=f"{CB_MENU}admin")],
     ])

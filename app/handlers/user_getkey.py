@@ -34,6 +34,7 @@ from .user_common import (
     _delete_all_awg_conf,
     _delete_last_awg_conf,
     _is_admin,
+    _resolve_profile_name,
     _touch_key_stat,
 )
 
@@ -95,17 +96,18 @@ def on_getkey_callback(update: Update, context: CallbackContext, payload: str) -
 
     if payload == "menu":
         _delete_all_awg_conf(context, chat_id)
-        if not user or not user.username:
+        profile_name = _resolve_profile_name(user.id if user else None)
+        if not user or not profile_name:
             safe_edit_message(
                 update,
                 context,
-                t(lang, "getkey.need_username"),
+                t(lang, "admin.requests.profile_missing"),
                 reply_markup=kb_getkey_servers([], lang),
                 parse_mode=PARSE_MODE,
             )
             return
 
-        name = user.username.lstrip("@")
+        name = profile_name
         st = get_subscription_status(name)
         if not st["active"] or st["frozen"]:
             safe_edit_message(
@@ -138,9 +140,10 @@ def on_getkey_callback(update: Update, context: CallbackContext, payload: str) -
         return
 
     if payload.startswith("server:"):
-        if not user or not user.username:
+        profile_name = _resolve_profile_name(user.id if user else None)
+        if not user or not profile_name:
             return
-        name = user.username.lstrip("@")
+        name = profile_name
         server_key = payload.split(":", 1)[1]
         grouped = _group_methods_by_server(get_allowed_protocols(name))
         text, items = render_server_menu(server_key, grouped.get(server_key, []), lang)
@@ -175,9 +178,10 @@ def on_getkey_callback(update: Update, context: CallbackContext, payload: str) -
         return
 
     if method and method.protocol_kind == "awg":
-        if not user or not user.username:
+        profile_name = _resolve_profile_name(user.id if user else None)
+        if not user or not profile_name:
             return
-        name = user.username.lstrip("@")
+        name = profile_name
         server_key = method.server_key
         rec = get_awg_server(name, server_key)
 
@@ -227,9 +231,10 @@ def on_getkey_callback(update: Update, context: CallbackContext, payload: str) -
         return
 
     if payload.startswith("xray_transport:"):
-        if not user or not user.username:
+        profile_name = _resolve_profile_name(user.id if user else None)
+        if not user or not profile_name:
             return
-        name = user.username.lstrip("@")
+        name = profile_name
         parts = payload.split(":")
         if len(parts) != 3:
             return
@@ -272,9 +277,10 @@ def on_getkey_callback(update: Update, context: CallbackContext, payload: str) -
         return
 
     if payload.startswith("xray_qr:"):
-        if not user or not user.username:
+        profile_name = _resolve_profile_name(user.id if user else None)
+        if not user or not profile_name:
             return
-        name = user.username.lstrip("@")
+        name = profile_name
         parts = payload.split(":")
         if len(parts) != 3:
             return
@@ -309,9 +315,10 @@ def on_getkey_callback(update: Update, context: CallbackContext, payload: str) -
         return
 
     if payload.startswith("awg_qr:"):
-        if not user or not user.username:
+        profile_name = _resolve_profile_name(user.id if user else None)
+        if not user or not profile_name:
             return
-        name = user.username.lstrip("@")
+        name = profile_name
         server_key = payload.split(":", 1)[1]
         method = get_awg_access_method_by_server_key(server_key)
         rec = get_awg_server(name, server_key)
@@ -338,10 +345,11 @@ def on_getkey_callback(update: Update, context: CallbackContext, payload: str) -
         return
 
     if payload.startswith("awg_conf:"):
-        if not user or not user.username:
+        profile_name = _resolve_profile_name(user.id if user else None)
+        if not user or not profile_name:
             return
 
-        name = user.username.lstrip("@")
+        name = profile_name
         server_key = payload.split(":", 1)[1]
         awg_method = get_awg_access_method_by_server_key(server_key)
         _delete_last_awg_conf(context, chat_id, server_key)
@@ -384,6 +392,6 @@ def on_getkey_callback(update: Update, context: CallbackContext, payload: str) -
         update,
         context,
         f"*{MENU_TITLE}*\n\n{t(lang, 'menu.choose_action')}",
-        reply_markup=kb_main_menu(is_admin, lang),
+        reply_markup=kb_main_menu(is_admin, True, lang),
         parse_mode=PARSE_MODE,
     )

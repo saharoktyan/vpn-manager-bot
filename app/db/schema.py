@@ -61,7 +61,12 @@ BASE_DDL: Iterable[str] = (
         username TEXT,
         first_name TEXT,
         last_name TEXT,
+        profile_name TEXT,
         locale TEXT NOT NULL DEFAULT 'ru',
+        access_granted INTEGER NOT NULL DEFAULT 0,
+        access_request_pending INTEGER NOT NULL DEFAULT 0,
+        access_request_sent_at TEXT,
+        notify_access_requests INTEGER NOT NULL DEFAULT 1,
         updated_at TEXT,
         last_key_at TEXT,
         key_issued_count INTEGER NOT NULL DEFAULT 0
@@ -165,6 +170,16 @@ def _migrate_telegram_users_table(conn: sqlite3.Connection) -> None:
     columns = _table_columns(conn, "telegram_users")
     if columns and "locale" not in columns:
         conn.execute("ALTER TABLE telegram_users ADD COLUMN locale TEXT NOT NULL DEFAULT 'ru'")
+    if columns and "profile_name" not in columns:
+        conn.execute("ALTER TABLE telegram_users ADD COLUMN profile_name TEXT")
+    if columns and "access_granted" not in columns:
+        conn.execute("ALTER TABLE telegram_users ADD COLUMN access_granted INTEGER NOT NULL DEFAULT 0")
+    if columns and "access_request_pending" not in columns:
+        conn.execute("ALTER TABLE telegram_users ADD COLUMN access_request_pending INTEGER NOT NULL DEFAULT 0")
+    if columns and "access_request_sent_at" not in columns:
+        conn.execute("ALTER TABLE telegram_users ADD COLUMN access_request_sent_at TEXT")
+    if columns and "notify_access_requests" not in columns:
+        conn.execute("ALTER TABLE telegram_users ADD COLUMN notify_access_requests INTEGER NOT NULL DEFAULT 1")
 
 
 def _migrate_servers_table(conn: sqlite3.Connection) -> None:
