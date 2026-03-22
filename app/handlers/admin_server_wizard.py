@@ -8,7 +8,14 @@ from telegram.ext import CallbackContext
 from config import CB_MENU, CB_SRV, PARSE_MODE
 from i18n import get_locale_for_update, t
 from services.provisioning_state import reconcile_server_state, render_server_provisioning_summary, summarize_server_provisioning
-from services.server_bootstrap import bootstrap_server, probe_server, sync_server_node_env, sync_xray_server_settings
+from services.server_bootstrap import (
+    bootstrap_server,
+    probe_server,
+    regenerate_awg_entropy,
+    show_awg_entropy,
+    sync_server_node_env,
+    sync_xray_server_settings,
+)
 from services.server_registry import RegisteredServer, get_server, list_servers, upsert_server
 from services.xray import get_server_link_status
 from utils.tg import answer_cb, safe_delete_by_id, safe_delete_update_message, safe_edit_by_ids, safe_edit_message
@@ -58,6 +65,7 @@ def _wizard_init(sent_message, mode: str) -> Dict[str, Any]:
             "public_host": "",
             "notes": "",
             "protocol_kinds": set(),
+            "awg_i1_preset": "quic",
         },
         "locale": "ru",
     }
@@ -154,6 +162,17 @@ def _protocol_markup(selected: Set[str], lang: str) -> InlineKeyboardMarkup:
                 InlineKeyboardButton(t(lang, "menu.back"), callback_data=f"{CB_SRV}back"),
                 InlineKeyboardButton("✅ Далее" if lang == "ru" else "✅ Next", callback_data=f"{CB_SRV}protocol:done"),
             ],
+        ]
+    )
+
+
+def _awg_preset_markup(lang: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [InlineKeyboardButton("QUIC", callback_data=f"{CB_SRV}awgpreset:quic")],
+            [InlineKeyboardButton("DNS", callback_data=f"{CB_SRV}awgpreset:dns")],
+            [InlineKeyboardButton("Chaos", callback_data=f"{CB_SRV}awgpreset:chaos")],
+            [InlineKeyboardButton(t(lang, "menu.back"), callback_data=f"{CB_SRV}back")],
         ]
     )
 
@@ -279,6 +298,7 @@ def _server_card_text(server: RegisteredServer, lang: str) -> str:
         f"awg_host: {server.awg_public_host or '—'}",
         f"awg_port: {server.awg_port}",
         f"awg_iface: {server.awg_iface}",
+        f"awg_i1_preset: {server.awg_i1_preset}",
         "",
         f"provisioning:\n{provisioning_text}",
     ]
@@ -298,6 +318,10 @@ def _server_card_markup(server_key: str, lang: str) -> InlineKeyboardMarkup:
                 InlineKeyboardButton(t(lang, "admin.wizard.sync_env"), callback_data=f"{CB_SRV}action:syncenv:{server_key}"),
                 InlineKeyboardButton(t(lang, "admin.wizard.sync_xray"), callback_data=f"{CB_SRV}action:syncxray:{server_key}"),
             ],
+            [
+                InlineKeyboardButton(t(lang, "admin.wizard.awg_entropy"), callback_data=f"{CB_SRV}action:awgentropy:{server_key}"),
+                InlineKeyboardButton(t(lang, "admin.wizard.awg_regen_entropy"), callback_data=f"{CB_SRV}action:awgregen:{server_key}"),
+            ],
             [InlineKeyboardButton(t(lang, "admin.wizard.reconcile"), callback_data=f"{CB_SRV}action:reconcile:{server_key}")],
             [InlineKeyboardButton(t(lang, "admin.wizard.edit"), callback_data=f"{CB_SRV}edit:{server_key}")],
             [InlineKeyboardButton(t(lang, "admin.wizard.to_servers"), callback_data=f"{CB_SRV}list")],
@@ -310,6 +334,7 @@ def _server_edit_menu_text(data: Dict[str, Any], lang: str) -> str:
     target = data["target"] or "—"
     public_host = data["public_host"] or "—"
     notes = data.get("notes") or "—"
+    awg_i1_preset = data.get("awg_i1_preset") or "quic"
     if lang == "ru":
         return (
             f"✏️ Редактирование сервера `{data['key']}`\n\n"
@@ -320,6 +345,7 @@ def _server_edit_menu_text(data: Dict[str, Any], lang: str) -> str:
             f"target: `{target}`\n"
             f"public_host: `{public_host}`\n"
             f"protocols: `{protocols}`\n"
+            f"awg_i1_preset: `{awg_i1_preset}`\n"
             f"notes: `{notes}`\n\n"
             "Выбери поле для изменения или сохрани изменения."
         )
@@ -332,6 +358,7 @@ def _server_edit_menu_text(data: Dict[str, Any], lang: str) -> str:
         f"target: `{target}`\n"
         f"public_host: `{public_host}`\n"
         f"protocols: `{protocols}`\n"
+        f"awg_i1_preset: `{awg_i1_preset}`\n"
         f"notes: `{notes}`\n\n"
         "Choose a field to edit or save the changes."
     )
@@ -345,6 +372,7 @@ def _server_edit_menu_markup(server_key: str, lang: str) -> InlineKeyboardMarkup
     target = "Target"
     public_host = "Public host"
     protocols = "Протоколы" if lang == "ru" else "Protocols"
+    awg_preset = "AWG маскировка" if lang == "ru" else "AWG preset"
     notes = "Заметки" if lang == "ru" else "Notes"
     save = "💾 Сохранить" if lang == "ru" else "💾 Save"
     back = "⬅️ К серверу" if lang == "ru" else "⬅️ To Server"
@@ -353,7 +381,8 @@ def _server_edit_menu_markup(server_key: str, lang: str) -> InlineKeyboardMarkup
             [InlineKeyboardButton(title, callback_data=f"{CB_SRV}editfield:title"), InlineKeyboardButton(flag, callback_data=f"{CB_SRV}editfield:flag")],
             [InlineKeyboardButton(region, callback_data=f"{CB_SRV}editfield:region"), InlineKeyboardButton(transport, callback_data=f"{CB_SRV}editfield:transport")],
             [InlineKeyboardButton(target, callback_data=f"{CB_SRV}editfield:target"), InlineKeyboardButton(public_host, callback_data=f"{CB_SRV}editfield:public_host")],
-            [InlineKeyboardButton(protocols, callback_data=f"{CB_SRV}editfield:protocols"), InlineKeyboardButton(notes, callback_data=f"{CB_SRV}editfield:notes")],
+            [InlineKeyboardButton(protocols, callback_data=f"{CB_SRV}editfield:protocols"), InlineKeyboardButton(awg_preset, callback_data=f"{CB_SRV}editfield:awg_i1_preset")],
+            [InlineKeyboardButton(notes, callback_data=f"{CB_SRV}editfield:notes")],
             [InlineKeyboardButton(save, callback_data=f"{CB_SRV}editsave")],
             [InlineKeyboardButton(back, callback_data=f"{CB_SRV}card:{server_key}")],
         ]
@@ -380,6 +409,7 @@ def _summary_text(data: Dict[str, Any], editing: bool = False, lang: str = "ru")
     protocols = ", ".join(sorted(data["protocol_kinds"])) or "—"
     target = data["target"] or "—"
     public_host = data["public_host"] or "—"
+    awg_i1_preset = data.get("awg_i1_preset") or "quic"
     action = ("Изменение" if editing else "Создание") if lang == "ru" else ("Editing" if editing else "Creating")
     return (
         f"🖥 {action} {'сервера' if lang == 'ru' else 'server'}\n\n"
@@ -390,7 +420,8 @@ def _summary_text(data: Dict[str, Any], editing: bool = False, lang: str = "ru")
         f"transport: {_md(data['transport'])}\n"
         f"target: {_md(target)}\n"
         f"public_host: {_md(public_host)}\n"
-        f"protocols: {_md(protocols)}\n\n"
+        f"protocols: {_md(protocols)}\n"
+        f"awg_i1_preset: {_md(awg_i1_preset)}\n\n"
         + ("\n\nПодтвердить?" if lang == "ru" else "\n\nConfirm?")
     )
 
@@ -550,6 +581,7 @@ def _load_server_into_data(server: RegisteredServer) -> Dict[str, Any]:
         "public_host": server.public_host or "",
         "notes": server.notes or "",
         "protocol_kinds": set(server.protocol_kinds),
+        "awg_i1_preset": server.awg_i1_preset or "quic",
     }
 
 
@@ -814,6 +846,7 @@ def on_server_callback(update: Update, context: CallbackContext, payload: str) -
             "public_host": "",
             "notes": "",
             "protocol_kinds": set(),
+            "awg_i1_preset": "quic",
         }
         _wizard_set(context, w)
         _render_step_prompt(context, lang, "key", data)
@@ -877,6 +910,14 @@ def on_server_callback(update: Update, context: CallbackContext, payload: str) -
             rc, out = sync_xray_server_settings(server_key)
             _wizard_edit(context, _action_result_text(t(lang, "admin.wizard.sync_xray"), rc, out, server_key), _server_card_markup(server_key, lang))
             return
+        if action == "awgentropy":
+            rc, out = show_awg_entropy(server_key)
+            _wizard_edit(context, _action_result_text(t(lang, "admin.wizard.awg_entropy"), rc, out, server_key), _server_card_markup(server_key, lang))
+            return
+        if action == "awgregen":
+            rc, out = regenerate_awg_entropy(server_key)
+            _wizard_edit(context, _action_result_text(t(lang, "admin.wizard.awg_regen_entropy"), rc, out, server_key), _server_card_markup(server_key, lang))
+            return
         if action == "reconcile":
             rc, out = reconcile_xray_server_state(server_key)
             _wizard_edit(context, _action_result_text(t(lang, "admin.wizard.reconcile"), rc, out, server_key), _server_card_markup(server_key, lang))
@@ -926,6 +967,13 @@ def on_server_callback(update: Update, context: CallbackContext, payload: str) -
         _wizard_edit(context, t(lang, "admin.wizard.server_choose_protocols"), _protocol_markup(selected, lang))
         return
 
+    if payload.startswith("awgpreset:"):
+        data["awg_i1_preset"] = payload.split(":", 1)[1]
+        w["step"] = "edit_menu"
+        _wizard_set(context, w)
+        _wizard_edit(context, _server_edit_menu_text(data, lang), _server_edit_menu_markup(data["key"], lang))
+        return
+
     if payload.startswith("editfield:"):
         field = payload.split(":", 1)[1]
         w["mode"] = "edit"
@@ -939,6 +987,12 @@ def on_server_callback(update: Update, context: CallbackContext, payload: str) -
             w["step"] = "protocols"
             _wizard_set(context, w)
             _wizard_edit(context, t(lang, "admin.wizard.server_choose_protocols"), _protocol_markup(data["protocol_kinds"], lang))
+            return
+        if field == "awg_i1_preset":
+            w["step"] = "awg_i1_preset"
+            _wizard_set(context, w)
+            prompt = "Выбери AWG preset для I1." if lang == "ru" else "Choose the AWG preset for I1."
+            _wizard_edit(context, prompt, _awg_preset_markup(lang))
             return
         if field == "notes":
             w["step"] = "notes"
@@ -970,6 +1024,7 @@ def on_server_callback(update: Update, context: CallbackContext, payload: str) -
             ssh_host=data["target"] or None,
             protocol_kinds=sorted(data["protocol_kinds"]),
             notes=data.get("notes") or "",
+            awg_i1_preset=data.get("awg_i1_preset") or "quic",
             bootstrap_state="edited",
         )
         w["data"] = _load_server_into_data(server)
@@ -994,6 +1049,8 @@ def on_server_callback(update: Update, context: CallbackContext, payload: str) -
             ssh_host=target or None,
             bootstrap_state="new" if w["mode"] == "create" else "edited",
         )
+        if (data.get("awg_i1_preset") or "quic") != "quic":
+            server = update_server_fields(server.key, awg_i1_preset=data.get("awg_i1_preset") or "quic")
         servers = list_servers(include_disabled=True)
         w["mode"] = "menu"
         w["step"] = "menu"

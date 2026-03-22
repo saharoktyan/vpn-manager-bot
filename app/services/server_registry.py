@@ -59,6 +59,7 @@ class RegisteredServer:
     awg_iface: str
     awg_public_host: str
     awg_port: int
+    awg_i1_preset: str
     created_at: Optional[str]
     updated_at: Optional[str]
 
@@ -118,6 +119,7 @@ def _row_to_server(row) -> RegisteredServer:
         awg_iface=str(row["awg_iface"] or "wg0"),
         awg_public_host=str(row["awg_public_host"] or public_host),
         awg_port=int(row["awg_port"] or 51820),
+        awg_i1_preset=str(row["awg_i1_preset"] or "quic"),
         created_at=row["created_at"],
         updated_at=row["updated_at"],
     )
@@ -172,8 +174,8 @@ def upsert_server(
                 xray_config_path, xray_service_name, xray_host, xray_sni, xray_pbk, xray_sid,
                 xray_short_id, xray_fp, xray_flow, xray_tcp_port, xray_xhttp_port,
                 xray_xhttp_path_prefix, awg_config_path, awg_iface, awg_public_host, awg_port,
-                created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                awg_i1_preset, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(key) DO UPDATE SET
                 region=excluded.region,
                 title=excluded.title,
@@ -221,6 +223,7 @@ def upsert_server(
                 "wg0",
                 public_host or ssh_host or "",
                 51820,
+                "quic",
                 existing["created_at"] if existing else now,
                 now,
             ),
@@ -268,6 +271,7 @@ def update_server_fields(server_key: str, **fields: object) -> RegisteredServer:
         "awg_iface",
         "awg_public_host",
         "awg_port",
+        "awg_i1_preset",
     }
     parts = []
     params: list[object] = []

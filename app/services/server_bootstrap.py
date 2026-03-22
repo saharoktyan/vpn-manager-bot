@@ -31,6 +31,7 @@ AWG_DNS=1.1.1.1
 AWG_MTU=1280
 AWG_ALLOWED_IPS=0.0.0.0/0
 AWG_KEEPALIVE=25
+AWG_I1_PRESET=quic
 """
 
 
@@ -436,6 +437,8 @@ with open("${CONFIG_PATH}", "w", encoding="utf-8") as fh:
     json.dump(config, fh, ensure_ascii=False, indent=2)
 PY
 
+chmod 0644 "$CONFIG_PATH"
+
 python3 - <<PY
 import json
 print(json.dumps({
@@ -597,6 +600,7 @@ if [[ "$changed" == "1" ]]; then
   python3 -m json.tool "$tmp" >/dev/null
   cp -a "$CONFIG" "${CONFIG}.bak.$(date +%Y%m%d-%H%M%S)"
   mv "$tmp" "$CONFIG"
+  chmod 0644 "$CONFIG"
   docker_cmd restart "$CONTAINER" >/dev/null 2>&1 || true
   echo "enabled"
 else
@@ -785,11 +789,14 @@ CONTAINER="${XRAY_CONTAINER_NAME:-xray}"
 CONFIG="${XRAY_CONFIG:-/opt/vpn-manager-node/xray/config.json}"
 
 mkdir -p "$DOCKER_DIR"
+chmod 0755 "$DOCKER_DIR" >/dev/null 2>&1 || true
 
 if [[ ! -f "$CONFIG" ]]; then
   echo "Xray config not found: $CONFIG" >&2
   exit 1
 fi
+
+chmod 0644 "$CONFIG" >/dev/null 2>&1 || true
 
 if docker_cmd ps -a --format '{{.Names}}' | grep -q "^${CONTAINER}$"; then
   docker_cmd rm -f "$CONTAINER" >/dev/null
@@ -804,6 +811,42 @@ docker_cmd run -d \
   "$IMAGE" run -c /etc/xray/config.json >/dev/null
 
 echo "Xray container deployed: $CONTAINER"
+"""
+
+
+AWG_SHOW_ENTROPY_SCRIPT = """#!/usr/bin/env bash
+set -euo pipefail
+source /etc/vpn-bot/node.env
+
+CFG="${AWG_CONFIG:-/opt/vpn-manager-node/amnezia-awg/data/wg0.conf}"
+PRESET="${AWG_I1_PRESET:-quic}"
+
+if [[ ! -f "$CFG" ]]; then
+  echo "AWG config not found: $CFG" >&2
+  exit 1
+fi
+
+CFG_ENV="$CFG" PRESET_ENV="$PRESET" python3 - <<'PY'
+import os
+
+cfg_path = os.environ["CFG_ENV"]
+preset = os.environ.get("PRESET_ENV", "quic")
+keys = ["Jc", "Jmin", "Jmax", "S1", "S2", "S3", "S4", "H1", "H2", "H3", "H4", "I1", "I2", "I3", "I4", "I5"]
+values = {key: "" for key in keys}
+
+with open(cfg_path, "r", encoding="utf-8", errors="ignore") as fh:
+    for raw in fh:
+        line = raw.strip()
+        if " = " not in line:
+            continue
+        key, value = line.split(" = ", 1)
+        if key in values:
+            values[key] = value.strip()
+
+print(f"preset: {preset}")
+for key in keys:
+    print(f"{key}: {values[key] or '—'}")
+PY
 """
 
 
@@ -1052,6 +1095,7 @@ CLIENT_DNS="${AWG_DNS:-1.1.1.1}"
 CLIENT_MTU="${AWG_MTU:-1280}"
 ALLOWED_IPS="${AWG_ALLOWED_IPS:-0.0.0.0/0}"
 KEEPALIVE="${AWG_KEEPALIVE:-25}"
+I1_PRESET="${AWG_I1_PRESET:-quic}"
 CONF2VPN="${AWG_CONF2VPN:-/opt/vpn-manager-node/conf2vpn.py}"
 AWG_TEMPLATE="${AWG_TEMPLATE:-/opt/vpn-manager-node/awg-template.json}"
 AMNEZIA_DECODER="${AWG_DECODER:-/opt/vpn-manager-node/amnezia-config-decoder.py}"
@@ -1078,27 +1122,63 @@ if ! docker_cmd ps --format '{{.Names}}' | grep -q "^${CONTAINER}$"; then
   exit 1
 fi
 
-read -r JC JMIN JMAX S1 S2 S3 S4 H1 H2 H3 H4 I1 I2 I3 I4 I5 < <(
-  awk -F ' = ' '
-    /^Jc = / {jc=$2}
-    /^Jmin = / {jmin=$2}
-    /^Jmax = / {jmax=$2}
-    /^S1 = / {s1=$2}
-    /^S2 = / {s2=$2}
-    /^S3 = / {s3=$2}
-    /^S4 = / {s4=$2}
-    /^H1 = / {h1=$2}
-    /^H2 = / {h2=$2}
-    /^H3 = / {h3=$2}
-    /^H4 = / {h4=$2}
-    /^I1 = / {i1=$2}
-    /^I2 = / {i2=$2}
-    /^I3 = / {i3=$2}
-    /^I4 = / {i4=$2}
-    /^I5 = / {i5=$2}
-    END {print jc, jmin, jmax, s1, s2, s3, s4, h1, h2, h3, h4, i1, i2, i3, i4, i5}
-  ' "$CFG"
-)
+eval "$(
+  CFG_ENV="$CFG" python3 - <<'PY'
+import os
+import shlex
+
+cfg_path = os.environ["CFG_ENV"]
+values = {
+    "JC": "",
+    "JMIN": "",
+    "JMAX": "",
+    "S1": "",
+    "S2": "",
+    "S3": "",
+    "S4": "",
+    "H1": "",
+    "H2": "",
+    "H3": "",
+    "H4": "",
+    "I1": "",
+    "I2": "",
+    "I3": "",
+    "I4": "",
+    "I5": "",
+}
+mapping = {
+    "Jc": "JC",
+    "Jmin": "JMIN",
+    "Jmax": "JMAX",
+    "S1": "S1",
+    "S2": "S2",
+    "S3": "S3",
+    "S4": "S4",
+    "H1": "H1",
+    "H2": "H2",
+    "H3": "H3",
+    "H4": "H4",
+    "I1": "I1",
+    "I2": "I2",
+    "I3": "I3",
+    "I4": "I4",
+    "I5": "I5",
+}
+
+with open(cfg_path, "r", encoding="utf-8", errors="ignore") as fh:
+    for raw in fh:
+        line = raw.strip()
+        if " = " not in line:
+            continue
+        key, value = line.split(" = ", 1)
+        env_key = mapping.get(key)
+        if env_key:
+            values[env_key] = value.strip()
+
+for key, value in values.items():
+    print(f"{key}={shlex.quote(value)}")
+PY
+)"
 
 USED_IPS="$(
   docker_cmd exec -i "$CONTAINER" sh -lc \
@@ -1247,6 +1327,7 @@ CFG="${AWG_CONFIG:-/opt/vpn-manager-node/amnezia-awg/data/wg0.conf}"
 IFACE="${AWG_IFACE:-wg0}"
 SERVER_ADDR="${AWG_SERVER_ADDRESS:-10.8.1.0/24}"
 PORT="${AWG_SERVER_PORT:-51820}"
+I1_PRESET="${AWG_I1_PRESET:-quic}"
 
 mkdir -p "$(dirname "$CFG")"
 if [[ -s "$CFG" ]]; then
@@ -1263,9 +1344,14 @@ fi
 SERVER_PRIV="$(wg genkey)"
 SERVER_PUB="$(printf '%s' "$SERVER_PRIV" | wg pubkey)"
 
-read -r JC JMIN JMAX S1 S2 S3 S4 H1 H2 H3 H4 < <(
-python3 - <<'PY'
+eval "$(
+I1_PRESET_ENV="$I1_PRESET" python3 - <<'PY'
+import os
 import random
+import secrets
+import shlex
+
+preset = os.environ.get("I1_PRESET_ENV", "").strip().lower()
 
 # AmneziaWG 2.0 docs:
 # - Jc: 0..10
@@ -1295,9 +1381,68 @@ for _ in range(4):
     segments.append(f"{start}-{end}")
     cursor = end + random.randint(5_000_000, 80_000_000)
 
-print(jc, jmin, jmax, s1, s2, s3, s4, *segments)
+def gen_i_payload() -> str:
+    random_prefix = random.randint(0, 3)
+    fixed_len = random.randint(12, 48)
+    parts = []
+    if random_prefix:
+        parts.append(f"<r {random_prefix}>")
+    parts.append(f"<b 0x{secrets.token_hex(fixed_len)}>")
+    if random.random() < 0.35:
+        parts.append(f"<r {random.randint(1, 2)}>")
+    return "".join(parts)
+
+def gen_i1_payload(kind: str) -> str:
+    if kind == "dns":
+        return "<rc 2><b 0x01000001000000000000><r 32>"
+    if kind == "chaos":
+        return f"<b 0x{secrets.token_hex(4)}><rc 4><r {random.randint(500, 1000)}>"
+    return "<b 0xc000000001><rc 8><r 1000>"
+
+def preset_values(kind: str):
+    if kind == "dns":
+        return {
+            "I1": gen_i1_payload(kind),
+            "I2": "<rc 2><b 0x01000001000000000000><r 64>",
+            "I3": "<r 48>",
+            "I4": "<r 80>",
+            "I5": "<r 40>",
+        }
+    if kind == "chaos":
+        return {
+            "I1": gen_i1_payload(kind),
+            "I2": f"<r {random.randint(100, 1400)}>",
+            "I3": f"<r {random.randint(100, 1400)}>",
+            "I4": f"<r {random.randint(100, 1400)}>",
+            "I5": f"<r {random.randint(100, 1400)}>",
+        }
+    return {
+        "I1": gen_i1_payload(kind),
+        "I2": "<b 0x40><rc 4><r 100>",
+        "I3": "<r 1200>",
+        "I4": "<r 100>",
+        "I5": "<r 1200>",
+    }
+
+values = {
+    "JC": str(jc),
+    "JMIN": str(jmin),
+    "JMAX": str(jmax),
+    "S1": str(s1),
+    "S2": str(s2),
+    "S3": str(s3),
+    "S4": str(s4),
+    "H1": segments[0],
+    "H2": segments[1],
+    "H3": segments[2],
+    "H4": segments[3],
+}
+values.update(preset_values(preset))
+
+for key, value in values.items():
+    print(f"{key}={shlex.quote(value)}")
 PY
-)
+)"
 
 cat > "$CFG" <<EOF
 [Interface]
@@ -1316,16 +1461,156 @@ H1 = $H1
 H2 = $H2
 H3 = $H3
 H4 = $H4
-# I1 =
-# I2 =
-# I3 =
-# I4 =
-# I5 =
+I1 = $I1
+I2 = $I2
+I3 = $I3
+I4 = $I4
+I5 = $I5
 EOF
 
 chmod 600 "$CFG"
 echo "AWG config initialized: $CFG"
 echo "Server public key: $SERVER_PUB"
+"""
+
+
+AWG_REGENERATE_ENTROPY_SCRIPT = """#!/usr/bin/env bash
+set -euo pipefail
+source /etc/vpn-bot/node.env
+
+CFG="${AWG_CONFIG:-/opt/vpn-manager-node/amnezia-awg/data/wg0.conf}"
+PRESET="${AWG_I1_PRESET:-quic}"
+CONTAINER="${AWG_CONTAINER_NAME:-amnezia-awg}"
+
+docker_cmd() {
+  if docker info >/dev/null 2>&1; then
+    docker "$@"
+    return
+  fi
+  if command -v sudo >/dev/null 2>&1 && sudo docker info >/dev/null 2>&1; then
+    sudo docker "$@"
+    return
+  fi
+  echo "Docker is not available for this user." >&2
+  exit 1
+}
+
+if [[ ! -f "$CFG" ]]; then
+  echo "AWG config not found: $CFG" >&2
+  exit 1
+fi
+
+TMP="$(mktemp)"
+PRESET_ENV="$PRESET" CFG_ENV="$CFG" TMP_ENV="$TMP" python3 - <<'PY'
+import os
+import random
+import re
+import secrets
+
+preset = os.environ.get("PRESET_ENV", "").strip().lower()
+cfg_path = os.environ["CFG_ENV"]
+tmp_path = os.environ["TMP_ENV"]
+
+jc = random.randint(3, 7)
+jmin = random.randint(64, 160)
+jmax = random.randint(max(jmin + 32, 192), min(jmin + 320, 1024))
+s1 = random.randint(0, 64)
+s2 = random.randint(0, 64)
+while s1 + 56 == s2:
+    s2 = random.randint(0, 64)
+s3 = random.randint(0, 64)
+s4 = random.randint(0, 32)
+
+segments = []
+cursor = random.randint(100_000_000, 300_000_000)
+for _ in range(4):
+    length = random.randint(10_000_000, 120_000_000)
+    start = cursor
+    end = start + length
+    if end > 4_294_967_295:
+        raise RuntimeError("Generated H-range exceeds uint32")
+    segments.append(f"{start}-{end}")
+    cursor = end + random.randint(5_000_000, 80_000_000)
+
+def gen_i_payload() -> str:
+    random_prefix = random.randint(0, 3)
+    fixed_len = random.randint(12, 48)
+    parts = []
+    if random_prefix:
+        parts.append(f"<r {random_prefix}>")
+    parts.append(f"<b 0x{secrets.token_hex(fixed_len)}>")
+    if random.random() < 0.35:
+        parts.append(f"<r {random.randint(1, 2)}>")
+    return "".join(parts)
+
+def gen_i1_payload(kind: str) -> str:
+    if kind == "dns":
+        return "<rc 2><b 0x01000001000000000000><r 32>"
+    if kind == "chaos":
+        return f"<b 0x{secrets.token_hex(4)}><rc 4><r {random.randint(500, 1000)}>"
+    return "<b 0xc000000001><rc 8><r 1000>"
+
+def preset_values(kind: str):
+    if kind == "dns":
+        return {
+            "I1": gen_i1_payload(kind),
+            "I2": "<rc 2><b 0x01000001000000000000><r 64>",
+            "I3": "<r 48>",
+            "I4": "<r 80>",
+            "I5": "<r 40>",
+        }
+    if kind == "chaos":
+        return {
+            "I1": gen_i1_payload(kind),
+            "I2": f"<r {random.randint(100, 1400)}>",
+            "I3": f"<r {random.randint(100, 1400)}>",
+            "I4": f"<r {random.randint(100, 1400)}>",
+            "I5": f"<r {random.randint(100, 1400)}>",
+        }
+    return {
+        "I1": gen_i1_payload(kind),
+        "I2": "<b 0x40><rc 4><r 100>",
+        "I3": "<r 1200>",
+        "I4": "<r 100>",
+        "I5": "<r 1200>",
+    }
+
+values = {
+    "Jc": str(jc),
+    "Jmin": str(jmin),
+    "Jmax": str(jmax),
+    "S1": str(s1),
+    "S2": str(s2),
+    "S3": str(s3),
+    "S4": str(s4),
+    "H1": segments[0],
+    "H2": segments[1],
+    "H3": segments[2],
+    "H4": segments[3],
+}
+values.update(preset_values(preset))
+
+text = open(cfg_path, "r", encoding="utf-8", errors="ignore").read()
+for key, value in values.items():
+    pattern = rf"(?m)^#?\\s*{re.escape(key)} =.*$"
+    replacement = f"{key} = {value}"
+    if re.search(pattern, text):
+        text = re.sub(pattern, replacement, text, count=1)
+    else:
+        text = re.sub(r"(?m)^(H4 = .*)$", r"\\1\n" + replacement, text, count=1)
+
+with open(tmp_path, "w", encoding="utf-8") as fh:
+    fh.write(text)
+PY
+
+python3 -m json.tool /dev/null >/dev/null 2>&1 || true
+cp -a "$CFG" "${CFG}.bak.$(date +%Y%m%d-%H%M%S)"
+mv "$TMP" "$CFG"
+chmod 600 "$CFG"
+docker_cmd restart "$CONTAINER" >/dev/null 2>&1 || true
+/opt/vpn-manager-node/show-awg-entropy.sh
+echo
+echo "WARNING: client AWG configs must be reissued after entropy regeneration."
 """
 
 
@@ -1533,6 +1818,7 @@ def render_server_node_env(server: RegisteredServer) -> str:
         f"AWG_MTU=1280\n"
         f"AWG_ALLOWED_IPS=0.0.0.0/0\n"
         f"AWG_KEEPALIVE=25\n"
+        f"AWG_I1_PRESET={server.awg_i1_preset}\n"
         f"AWG_SERVER_IP={server.awg_public_host or server.public_host}\n"
         f"AWG_SERVER_PORT={server.awg_port}\n"
     )
@@ -1587,6 +1873,24 @@ def sync_xray_server_settings(server_key: str) -> Tuple[int, str]:
     return 0, json.dumps(generated, ensure_ascii=False, indent=2)
 
 
+def show_awg_entropy(server_key: str) -> Tuple[int, str]:
+    server = get_server(server_key)
+    if not server:
+        return 1, f"Server {server_key} not found"
+    if "awg" not in server.protocol_kinds:
+        return 1, f"Server {server_key} does not have awg enabled"
+    return run_server_command(server, "/opt/vpn-manager-node/show-awg-entropy.sh", timeout=60)
+
+
+def regenerate_awg_entropy(server_key: str) -> Tuple[int, str]:
+    server = get_server(server_key)
+    if not server:
+        return 1, f"Server {server_key} not found"
+    if "awg" not in server.protocol_kinds:
+        return 1, f"Server {server_key} does not have awg enabled"
+    return run_server_command(server, "/opt/vpn-manager-node/regenerate-awg-entropy.sh", timeout=180)
+
+
 def bootstrap_server(server_key: str) -> Tuple[int, str]:
     server = get_server(server_key)
     if not server:
@@ -1613,7 +1917,9 @@ def bootstrap_server(server_key: str) -> Tuple[int, str]:
         "/opt/vpn-manager-node/awg-template.json": (AWG_TEMPLATE_JSON, "0644"),
         "/opt/vpn-manager-node/awg-add-user.sh": (AWG_ADD_SCRIPT, "0755"),
         "/opt/vpn-manager-node/awg-del-user.sh": (AWG_DEL_SCRIPT, "0755"),
+        "/opt/vpn-manager-node/show-awg-entropy.sh": (AWG_SHOW_ENTROPY_SCRIPT, "0755"),
         "/opt/vpn-manager-node/init-awg.sh": (AWG_INIT_SCRIPT, "0755"),
+        "/opt/vpn-manager-node/regenerate-awg-entropy.sh": (AWG_REGENERATE_ENTROPY_SCRIPT, "0755"),
         "/opt/vpn-manager-node/amnezia-awg/Dockerfile": (AWG_DOCKERFILE, "0644"),
         "/opt/vpn-manager-node/deploy-awg.sh": (AWG_DEPLOY_SCRIPT, "0755"),
     }

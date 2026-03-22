@@ -112,6 +112,7 @@ CREATE TABLE IF NOT EXISTS servers (
     awg_iface TEXT,
     awg_public_host TEXT,
     awg_port INTEGER,
+    awg_i1_preset TEXT NOT NULL DEFAULT 'quic',
     created_at TEXT,
     updated_at TEXT
 )
@@ -235,6 +236,7 @@ def _migrate_servers_table(conn: sqlite3.Connection) -> None:
         "awg_iface",
         "awg_public_host",
         "awg_port",
+        "awg_i1_preset",
         "created_at",
         "updated_at",
     }
@@ -266,8 +268,8 @@ def _migrate_servers_table(conn: sqlite3.Connection) -> None:
                 xray_config_path, xray_service_name, xray_host, xray_sni, xray_pbk,
                 xray_sid, xray_short_id, xray_fp, xray_flow, xray_tcp_port, xray_xhttp_port,
                 xray_xhttp_path_prefix, awg_config_path, awg_iface, awg_public_host, awg_port,
-                created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                awg_i1_preset, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 key,
@@ -300,6 +302,7 @@ def _migrate_servers_table(conn: sqlite3.Connection) -> None:
                 row_map.get("awg_iface") or "wg0",
                 row_map.get("awg_public_host") or public_host,
                 row_map.get("awg_port") or 51820,
+                row_map.get("awg_i1_preset") or "quic",
                 row_map.get("created_at"),
                 row_map.get("updated_at"),
             ),
