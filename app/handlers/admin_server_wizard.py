@@ -7,6 +7,7 @@ from telegram.ext import CallbackContext
 
 from config import CB_SRV, PARSE_MODE
 from i18n import get_locale_for_update, t
+from services.provisioning_state import reconcile_server_state, render_server_provisioning_summary, summarize_server_provisioning
 from services.server_bootstrap import bootstrap_server, probe_server, sync_server_node_env, sync_xray_server_settings
 from services.server_registry import RegisteredServer, get_server, list_servers, upsert_server
 from services.xray import get_server_link_status
@@ -177,9 +178,24 @@ def _server_dashboard_text(servers: Sequence[RegisteredServer], lang: str) -> st
     lines = [t(lang, "admin.wizard.server_menu"), ""]
     for server in servers:
         status_icon, status_text = _server_overall_status(server, lang)
+        prov_summary = summarize_server_provisioning(server.key)
+        total = int(prov_summary["total"])
+        prov_suffix = ""
+        if total > 0:
+            failed = int(prov_summary["by_status"]["failed"])
+            attention = int(prov_summary["by_status"]["needs_attention"])
+            ready = int(prov_summary["by_status"]["provisioned"])
+            if lang == "ru":
+                prov_suffix = f" | профили {ready}/{total}"
+            else:
+                prov_suffix = f" | profiles {ready}/{total}"
+            if failed > 0:
+                prov_suffix += f" | {'ошибки' if lang == 'ru' else 'failed'} {failed}"
+            elif attention > 0:
+                prov_suffix += f" | {'внимание' if lang == 'ru' else 'attention'} {attention}"
         lines.append(
             f"\n{server.flag} {server.title} ({server.key})"
-            f"\n  {status_icon} {status_text}"
+            f"\n  {status_icon} {status_text}{prov_suffix}"
         )
     return "\n".join(lines)
 
@@ -190,6 +206,12 @@ def _server_overall_status(server: RegisteredServer, lang: str) -> tuple[str, st
         return server_icon, server_text
     if server.bootstrap_state != "bootstrapped":
         return server_icon, server_text
+
+    prov = summarize_server_provisioning(server.key)
+    if prov["overall"] == "failed":
+        return "⚠️", t(lang, "admin.wizard.server_status_attention")
+    if prov["overall"] == "needs_attention":
+        return "⚠️", t(lang, "admin.wizard.server_status_attention")
 
     xray_ready, _ = get_server_link_status(server.key) if "xray" in server.protocol_kinds else (True, "ok")
     awg_ready = ("awg" not in server.protocol_kinds) or server.bootstrap_state == "bootstrapped"
@@ -212,6 +234,7 @@ def _server_card_text(server: RegisteredServer, lang: str) -> str:
     server_icon, server_text = _server_status(server, lang)
     xray_icon, xray_text = _xray_status(server, lang)
     awg_icon, awg_text = _awg_status(server, lang)
+    provisioning_text = render_server_provisioning_summary(server.key, lang)
     protocols = ", ".join(server.protocol_kinds) or "—"
     lines = [
         f"🖥 {server.flag} {server.title} ({server.key})",
@@ -232,6 +255,8 @@ def _server_card_text(server: RegisteredServer, lang: str) -> str:
         f"awg_host: {server.awg_public_host or '—'}",
         f"awg_port: {server.awg_port}",
         f"awg_iface: {server.awg_iface}",
+        "",
+        f"provisioning:\n{provisioning_text}",
     ]
     if server.notes:
         lines.extend(["", f"notes: {server.notes}"])
@@ -249,6 +274,7 @@ def _server_card_markup(server_key: str, lang: str) -> InlineKeyboardMarkup:
                 InlineKeyboardButton(t(lang, "admin.wizard.sync_env"), callback_data=f"{CB_SRV}action:syncenv:{server_key}"),
                 InlineKeyboardButton(t(lang, "admin.wizard.sync_xray"), callback_data=f"{CB_SRV}action:syncxray:{server_key}"),
             ],
+            [InlineKeyboardButton(t(lang, "admin.wizard.reconcile"), callback_data=f"{CB_SRV}action:reconcile:{server_key}")],
             [InlineKeyboardButton(t(lang, "admin.wizard.edit"), callback_data=f"{CB_SRV}edit:{server_key}")],
             [InlineKeyboardButton(t(lang, "admin.wizard.to_servers"), callback_data=f"{CB_SRV}list")],
         ]
@@ -738,6 +764,10 @@ def on_server_callback(update: Update, context: CallbackContext, payload: str) -
         if action == "syncxray":
             rc, out = sync_xray_server_settings(server_key)
             _wizard_edit(context, _action_result_text(t(lang, "admin.wizard.sync_xray"), rc, out, server_key), _server_card_markup(server_key, lang))
+            return
+        if action == "reconcile":
+            rc, out = reconcile_xray_server_state(server_key)
+            _wizard_edit(context, _action_result_text(t(lang, "admin.wizard.reconcile"), rc, out, server_key), _server_card_markup(server_key, lang))
             return
 
     if payload.startswith("transport:"):

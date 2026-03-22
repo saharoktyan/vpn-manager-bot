@@ -19,6 +19,7 @@ from domain.servers import (
 from services import xray as xray_svc
 from services.awg import _extract_wg_conf, create_awg_user, delete_awg_user
 from services.awg_profiles import get_awg_servers, remove_awg_profile, remove_awg_server, upsert_awg_server
+from services.provisioning_state import delete_profile_server_state, reconcile_profile_state, upsert_profile_server_state
 from services.server_registry import list_servers
 from services.subscriptions import ensure_xray_caps, freeze_profile, is_frozen, subs_store, unfreeze_profile, utcnow, wg_store
 from ui.admin_views import (
@@ -123,14 +124,7 @@ def _wizard_close(context: CallbackContext, text: str | None = None) -> None:
 def _get_all_names() -> List[str]:
     subs = subs_store.read()
     wg = wg_store.read()
-    xset: set[str] = set()
-    for server in list_servers():
-        if "xray" not in server.protocol_kinds:
-            continue
-        code, xnames, _ = xray_svc.list_users(server.key)
-        if code == 0:
-            xset.update(xnames)
-    return sorted(set([n for n in subs.keys() if not n.startswith("_")] + list(wg.keys()) + list(xset)))
+    return sorted(set([n for n in subs.keys() if not n.startswith("_")] + list(wg.keys())))
 
 
 def createcfg_cmd(update: Update, context: CallbackContext) -> None:
@@ -520,6 +514,18 @@ def on_cfg_callback(update: Update, context: CallbackContext, payload: str) -> N
         _wizard_edit(context, *_render_profile_card(name, w["protocols"], w["sub_days"], frozen=False, lang=lang))
         return
 
+    if payload.startswith("cardreconcile:"):
+        name = payload.split(":", 1)[1]
+        if not _load_profile_into_wizard(context, name):
+            return
+        code, out = reconcile_profile_state(name)
+        prefix = ("🔄 Сверка состояния" if lang == "ru" else "🔄 Reconcile state")
+        text = f"{prefix}\n\n{out}"
+        if code != 0:
+            text = f"⚠️ {prefix}\n\n{out}"
+        _wizard_edit_plain(context, text, _render_profile_card(name, w["protocols"], w["sub_days"], frozen=is_frozen(name), lang=lang)[1])
+        return
+
     if payload.startswith("pick:"):
         name = payload.split(":", 1)[1]
         if not _load_profile_into_wizard(context, name):
@@ -641,18 +647,22 @@ def _finish_create(context: CallbackContext) -> None:
 
     msgs: List[str] = []
     errors: List[str] = []
+    xray_state_updates: List[tuple[str, str, Optional[str], Optional[str]]] = []
     uuid_val: Optional[str] = None
     xray_methods = [method for method in get_access_methods_for_codes(protocols) if method.protocol_kind == "xray"]
     for method in xray_methods:
         code, out, ensured_uuid = xray_svc.ensure_user(name, method.server_key, uuid_value=uuid_val)
         if code != 0 or not ensured_uuid:
+            xray_state_updates.append(("failed", method.server_key, uuid_val, (out or "")[-500:] or "create failed"))
             errors.append(f"{method.label}: ошибка создания\n{(out or '')[-500:]}")
             continue
         uuid_val = ensured_uuid
         ready, reason = xray_svc.get_server_link_status(method.server_key)
         if ready:
+            xray_state_updates.append(("provisioned", method.server_key, ensured_uuid, None))
             msgs.append(f"{method.label}: ✅")
         else:
+            xray_state_updates.append(("needs_attention", method.server_key, ensured_uuid, reason))
             errors.append(f"{method.label}: профиль создан, но сервер не готов к выдаче ссылки\n{reason}")
     if uuid_val:
         ensure_xray_caps(name, uuid_val)
@@ -672,11 +682,27 @@ def _finish_create(context: CallbackContext) -> None:
         rec["xray"] = {"enabled": True, "transports": ["xhttp", "tcp"], "default": "xhttp"}
     subs[name] = rec
     subs_store.write(subs)
+    for status, server_key, remote_id, last_error in xray_state_updates:
+        upsert_profile_server_state(
+            name,
+            server_key,
+            "xray",
+            status=status,
+            remote_id=remote_id,
+            last_error=last_error,
+        )
 
     awg_methods = [method for method in get_access_methods_for_codes(protocols) if method.protocol_kind == "awg"]
     for awg_method in awg_methods:
         code, cfg, raw = create_awg_user(awg_method.server_key, name)
         if code != 0 or not (cfg or "").strip():
+            upsert_profile_server_state(
+                name,
+                awg_method.server_key,
+                "awg",
+                status="failed",
+                last_error=(raw or "")[-500:] or f"rc={code}",
+            )
             errors.append(f"{awg_method.label}: rc={code}\n{(raw or '')[-500:]}")
             continue
         upsert_awg_server(
@@ -686,6 +712,7 @@ def _finish_create(context: CallbackContext) -> None:
             wg_conf=_extract_wg_conf(cfg),
             created_at=utcnow().isoformat(timespec="minutes"),
         )
+        upsert_profile_server_state(name, awg_method.server_key, "awg", status="provisioned", last_error=None)
         msgs.append(f"{awg_method.label}: ✅")
 
     lines = [f"Профиль {name} создан/обновлён:"] + [f"- {msg}" for msg in msgs]
@@ -731,13 +758,37 @@ def _save_edit(context: CallbackContext) -> None:
     for method in selected_xray_methods:
         code, out, ensured_uuid = xray_svc.ensure_user(name, method.server_key, uuid_value=uuid_val)
         if code != 0 or not ensured_uuid:
+            upsert_profile_server_state(
+                name,
+                method.server_key,
+                "xray",
+                status="failed",
+                remote_id=uuid_val,
+                last_error=(out or "")[-500:] or "sync failed",
+            )
             errors.append(f"{method.label}: не удалось синхронизировать\n{(out or '')[-500:]}")
             continue
         uuid_val = ensured_uuid
         ready, reason = xray_svc.get_server_link_status(method.server_key)
         if ready:
+            upsert_profile_server_state(
+                name,
+                method.server_key,
+                "xray",
+                status="provisioned",
+                remote_id=ensured_uuid,
+                last_error=None,
+            )
             messages.append(f"{method.label}: синхронизирован")
         else:
+            upsert_profile_server_state(
+                name,
+                method.server_key,
+                "xray",
+                status="needs_attention",
+                remote_id=ensured_uuid,
+                last_error=reason,
+            )
             errors.append(f"{method.label}: профиль есть, но сервер не готов к выдаче ссылки\n{reason}")
 
     if uuid_val:
@@ -748,8 +799,17 @@ def _save_edit(context: CallbackContext) -> None:
     for server_key in sorted(existing_xray_server_keys - selected_xray_server_keys):
         code, _out = xray_svc.delete_user(name, server_key)
         if code != 0:
+            upsert_profile_server_state(
+                name,
+                server_key,
+                "xray",
+                status="failed",
+                remote_id=uuid_val,
+                last_error="delete failed",
+            )
             errors.append(f"Xray {server_key}: не удалось удалить профиль")
         else:
+            delete_profile_server_state(name, server_key, "xray")
             messages.append(f"Xray {server_key}: удалён")
 
     subs[name] = rec
@@ -765,6 +825,13 @@ def _save_edit(context: CallbackContext) -> None:
             continue
         code, cfg, raw = create_awg_user(method.server_key, name)
         if code != 0 or not (cfg or "").strip():
+            upsert_profile_server_state(
+                name,
+                method.server_key,
+                "awg",
+                status="failed",
+                last_error=(raw or "")[-500:] or f"rc={code}",
+            )
             errors.append(f"{method.label}: rc={code}\n{(raw or '')[-500:]}")
             continue
         upsert_awg_server(
@@ -774,14 +841,23 @@ def _save_edit(context: CallbackContext) -> None:
             wg_conf=_extract_wg_conf(cfg),
             created_at=utcnow().isoformat(timespec="minutes"),
         )
+        upsert_profile_server_state(name, method.server_key, "awg", status="provisioned", last_error=None)
         messages.append(f"{method.label}: создан")
 
     for server_key in sorted(existing_server_keys - selected_server_keys):
         code, _out = delete_awg_user(server_key, name)
         if code != 0:
+            upsert_profile_server_state(
+                name,
+                server_key,
+                "awg",
+                status="failed",
+                last_error="delete failed",
+            )
             errors.append(f"AWG {server_key}: не удалось удалить с сервера")
             continue
         remove_awg_server(name, server_key)
+        delete_profile_server_state(name, server_key, "awg")
         messages.append(f"AWG {server_key}: удалён")
 
     text, markup = _render_edit_menu(name, protocols, sub_days, frozen=is_frozen(name))

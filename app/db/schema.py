@@ -125,6 +125,24 @@ CREATE TABLE IF NOT EXISTS awg_server_configs (
 """
 
 
+PROFILE_SERVER_STATE_DDL = """
+CREATE TABLE IF NOT EXISTS profile_server_state (
+    profile_name TEXT NOT NULL,
+    server_key TEXT NOT NULL,
+    protocol_kind TEXT NOT NULL,
+    desired_enabled INTEGER NOT NULL DEFAULT 1,
+    status TEXT NOT NULL DEFAULT 'pending',
+    remote_id TEXT,
+    last_error TEXT,
+    created_at TEXT,
+    updated_at TEXT,
+    PRIMARY KEY (profile_name, server_key, protocol_kind),
+    FOREIGN KEY (profile_name) REFERENCES profiles(name) ON DELETE CASCADE,
+    FOREIGN KEY (server_key) REFERENCES servers(key) ON DELETE CASCADE
+)
+"""
+
+
 def _table_exists(conn: sqlite3.Connection, name: str) -> bool:
     row = conn.execute(
         "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
@@ -295,12 +313,36 @@ def _migrate_awg_table(conn: sqlite3.Connection) -> None:
     conn.execute("DROP TABLE awg_server_configs_old")
 
 
+def _create_profile_server_state_table(conn: sqlite3.Connection) -> None:
+    conn.execute(PROFILE_SERVER_STATE_DDL)
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_profile_server_state_profile
+        ON profile_server_state(profile_name)
+        """
+    )
+
+
+def _migrate_profile_server_state_table(conn: sqlite3.Connection) -> None:
+    columns = _table_columns(conn, "profile_server_state")
+    if not columns:
+        _create_profile_server_state_table(conn)
+        return
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_profile_server_state_profile
+        ON profile_server_state(profile_name)
+        """
+    )
+
+
 def ensure_schema(conn: sqlite3.Connection) -> None:
     for ddl in BASE_DDL:
         conn.execute(ddl)
     _migrate_telegram_users_table(conn)
     _migrate_servers_table(conn)
     _migrate_awg_table(conn)
+    _migrate_profile_server_state_table(conn)
     conn.execute(
-        "INSERT OR REPLACE INTO schema_meta(key, value) VALUES ('schema_version', '2')"
+        "INSERT OR REPLACE INTO schema_meta(key, value) VALUES ('schema_version', '3')"
     )

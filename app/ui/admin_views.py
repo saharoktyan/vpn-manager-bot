@@ -8,6 +8,7 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from config import CB_CFG, LIST_PAGE_SIZE
 from domain.servers import get_access_methods, get_access_methods_for_codes, get_server
 from i18n import t
+from services.provisioning_state import render_profile_server_state_summary
 
 
 def render_proto_keyboard(selected: Set[str], lang: str = "ru") -> InlineKeyboardMarkup:
@@ -134,10 +135,12 @@ def render_profile_dashboard(names: List[str], page: int, lang: str = "ru") -> T
 
 def render_edit_menu(name: str, protocols: Set[str], sub_days: Optional[int], frozen: bool, lang: str = "ru") -> Tuple[str, InlineKeyboardMarkup]:
     proto_txt = render_protocols_summary(protocols)
+    state_txt = render_profile_server_state_summary(name, lang)
     sub_txt = "♾ бессрочная" if sub_days is None else f"{sub_days} дн." if lang == "ru" else "♾ lifetime" if sub_days is None else f"{sub_days} d."
     fr = "🧊 заморожен" if frozen and lang == "ru" else "✅ активен" if lang == "ru" else "🧊 frozen" if frozen else "✅ active"
     title = "✏️ *Редактирование:*" if lang == "ru" else "✏️ *Editing:*"
     access = "Доступ" if lang == "ru" else "Access"
+    provision = "Применение" if lang == "ru" else "Provisioning"
     sub = "Подписка" if lang == "ru" else "Subscription"
     status = "Статус" if lang == "ru" else "Status"
     choose = "Выбери поле для изменения:" if lang == "ru" else "Choose a field to edit:"
@@ -145,6 +148,7 @@ def render_edit_menu(name: str, protocols: Set[str], sub_days: Optional[int], fr
         (
             f"{title} `{name}`\n\n"
             f"{access}:\n{proto_txt}\n\n"
+            f"{provision}:\n{state_txt}\n\n"
             f"{sub}: *{sub_txt}*\n"
             f"{status}: *{fr}*\n\n"
             f"{choose}"
@@ -221,9 +225,11 @@ def render_delete_confirm(name: str, lang: str = "ru") -> Tuple[str, InlineKeybo
 
 def render_profile_card(name: str, protocols: Set[str], sub_days: Optional[int], frozen: bool, lang: str = "ru") -> Tuple[str, InlineKeyboardMarkup]:
     proto_txt = render_protocols_summary(protocols)
+    state_txt = render_profile_server_state_summary(name, lang)
     sub_txt = "♾ бессрочная" if sub_days is None else f"{sub_days} дн." if lang == "ru" else "♾ lifetime" if sub_days is None else f"{sub_days} d."
     fr = "🧊 заморожен" if frozen and lang == "ru" else "✅ активен" if lang == "ru" else "🧊 frozen" if frozen else "✅ active"
     access = "Доступ" if lang == "ru" else "Access"
+    provision = "Применение" if lang == "ru" else "Provisioning"
     sub = "Подписка" if lang == "ru" else "Subscription"
     status = "Статус" if lang == "ru" else "Status"
     actions = "Быстрые действия:" if lang == "ru" else "Quick actions:"
@@ -231,6 +237,7 @@ def render_profile_card(name: str, protocols: Set[str], sub_days: Optional[int],
         (
             f"👤 *{name}*\n\n"
             f"{access}:\n{proto_txt}\n\n"
+            f"{provision}:\n{state_txt}\n\n"
             f"{sub}: *{sub_txt}*\n"
             f"{status}: *{fr}*\n\n"
             f"{actions}"
@@ -239,6 +246,7 @@ def render_profile_card(name: str, protocols: Set[str], sub_days: Optional[int],
             [
                 [InlineKeyboardButton("✏️ Редактировать" if lang == "ru" else "✏️ Edit", callback_data=f"{CB_CFG}cardedit:{name}")],
                 [
+                    InlineKeyboardButton("🔄 Сверить" if lang == "ru" else "🔄 Reconcile", callback_data=f"{CB_CFG}cardreconcile:{name}"),
                     InlineKeyboardButton("🧊 Freeze", callback_data=f"{CB_CFG}cardfreeze:{name}"),
                     InlineKeyboardButton("🔥 Unfreeze", callback_data=f"{CB_CFG}cardunfreeze:{name}"),
                 ],

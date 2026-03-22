@@ -241,8 +241,6 @@ def on_getkey_callback(update: Update, context: CallbackContext, payload: str) -
         rec = get_profile(name)
         uuid_val = rec.get("uuid") if isinstance(rec, dict) else None
         if not uuid_val:
-            uuid_val = xray_svc.get_uuid_by_name(name, method.server_key)
-        if not uuid_val:
             safe_edit_message(
                 update,
                 context,
@@ -287,8 +285,6 @@ def on_getkey_callback(update: Update, context: CallbackContext, payload: str) -
             return
         rec = get_profile(name)
         uuid_val = rec.get("uuid") if isinstance(rec, dict) else None
-        if not uuid_val:
-            uuid_val = xray_svc.get_uuid_by_name(name, method.server_key)
         if not uuid_val:
             safe_edit_message(
                 update,

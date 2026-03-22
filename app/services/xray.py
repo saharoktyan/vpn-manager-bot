@@ -4,7 +4,7 @@ from __future__ import annotations
 import logging
 import shlex
 import uuid as uuid_lib
-from typing import List, Optional, Tuple
+from typing import Any, List, Optional, Tuple
 from urllib.parse import quote
 
 from services.server_registry import get_server, list_servers
@@ -43,6 +43,14 @@ def _default_xray_server_key() -> Optional[str]:
     return None
 
 
+def get_uuid_local(name: str) -> Optional[str]:
+    from services.subscriptions import get_profile
+
+    rec = get_profile(name)
+    uuid_val = rec.get("uuid") if isinstance(rec, dict) else None
+    return str(uuid_val) if isinstance(uuid_val, str) and uuid_val.strip() else None
+
+
 def add_user(name: str, server_key: Optional[str] = None, uuid_value: Optional[str] = None) -> Tuple[int, str]:
     server_key = server_key or _default_xray_server_key()
     if not server_key:
@@ -52,9 +60,9 @@ def add_user(name: str, server_key: Optional[str] = None, uuid_value: Optional[s
         return 1, f"Server {server_key} not found"
 
     if uuid_value:
-        cmd = f"/opt/vpn-manager-node/add-user-existing.sh {shlex.quote(name)} {shlex.quote(uuid_value)}"
+        cmd = f"/opt/vpn-manager-node/xray-add-user-existing.sh {shlex.quote(name)} {shlex.quote(uuid_value)}"
     else:
-        cmd = f"echo {shlex.quote(name)} | /opt/vpn-manager-node/add-user.sh"
+        cmd = f"echo {shlex.quote(name)} | /opt/vpn-manager-node/xray-add-user.sh"
     return run_server_command(server, cmd, timeout=120)
 
 
@@ -65,7 +73,7 @@ def list_users(server_key: Optional[str] = None) -> Tuple[int, List[str], str]:
     server = get_server(server_key)
     if not server:
         return 1, [], f"Server {server_key} not found"
-    code, out = run_server_command(server, "/opt/vpn-manager-node/list-users.sh", timeout=60)
+    code, out = run_server_command(server, "/opt/vpn-manager-node/xray-list-users.sh", timeout=60)
     if code != 0:
         return code, [], out
     lines = out.strip().splitlines()
@@ -79,6 +87,29 @@ def list_users(server_key: Optional[str] = None) -> Tuple[int, List[str], str]:
     return 0, names, out
 
 
+def list_user_records(server_key: Optional[str] = None) -> Tuple[int, List[dict[str, Any]], str]:
+    server_key = server_key or _default_xray_server_key()
+    if not server_key:
+        return 1, [], "No Xray servers are registered"
+    server = get_server(server_key)
+    if not server:
+        return 1, [], f"Server {server_key} not found"
+    code, out = run_server_command(server, "/opt/vpn-manager-node/xray-list-users.sh", timeout=60)
+    if code != 0:
+        return code, [], out
+    lines = out.strip().splitlines()
+    if not lines:
+        return 0, [], out
+    items: List[dict[str, Any]] = []
+    for line in lines[1:]:
+        parts = line.split()
+        if len(parts) >= 2:
+            items.append({"name": parts[0], "uuid": parts[1]})
+        elif parts:
+            items.append({"name": parts[0], "uuid": None})
+    return 0, items, out
+
+
 def list_users_cached(server_key: str, ttl: float = 3.0) -> Tuple[int, List[str], str]:
     cached = _cache_get(server_key, ttl)
     if cached is not None:
@@ -89,6 +120,9 @@ def list_users_cached(server_key: str, ttl: float = 3.0) -> Tuple[int, List[str]
 
 
 def get_uuid_by_name(name: str, server_key: Optional[str] = None) -> Optional[str]:
+    local_uuid = get_uuid_local(name)
+    if local_uuid:
+        return local_uuid
     server_key = server_key or _default_xray_server_key()
     if not server_key:
         return None
@@ -104,12 +138,12 @@ def get_uuid_by_name(name: str, server_key: Optional[str] = None) -> Optional[st
 
 
 def ensure_user(name: str, server_key: str, uuid_value: Optional[str] = None) -> Tuple[int, str, Optional[str]]:
-    existing_uuid = get_uuid_by_name(name, server_key)
-    if existing_uuid:
-        return 0, "already exists", existing_uuid
-    uuid_value = uuid_value or str(uuid_lib.uuid4())
+    uuid_value = uuid_value or get_uuid_local(name) or str(uuid_lib.uuid4())
     code, out = add_user(name, server_key=server_key, uuid_value=uuid_value)
     if code != 0:
+        lower_out = (out or "").lower()
+        if "already exists" in lower_out or "exists" in lower_out or "duplicate" in lower_out:
+            return 0, out, uuid_value
         return code, out, None
     return 0, out, uuid_value
 
@@ -121,7 +155,7 @@ def delete_user(name: str, server_key: Optional[str] = None) -> Tuple[int, str]:
     server = get_server(server_key)
     if not server:
         return 1, f"Server {server_key} not found"
-    cmd = f"/opt/vpn-manager-node/del-user.sh {shlex.quote(name)}"
+    cmd = f"/opt/vpn-manager-node/xray-del-user.sh {shlex.quote(name)}"
     return run_server_command(server, cmd, timeout=120)
 
 

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from datetime import timedelta
+import uuid as uuid_lib
 
 from telegram import Update
 from telegram.ext import CallbackContext
@@ -27,20 +28,16 @@ def add_cmd(update: Update, context: CallbackContext) -> None:
         update.effective_message.reply_text(t(lang, "admin.cmd.add_usage"))
         return
     name = parts[1].lstrip("@")
+    uuid_val = str(uuid_lib.uuid4())
 
     update.effective_message.reply_text(t(lang, "admin.cmd.add_creating", name=name))
-    code, out = xray_svc.add_user(name)
+    code, out = xray_svc.add_user(name, uuid_value=uuid_val)
     if code != 0:
         update.effective_message.reply_text(
             t(lang, "admin.cmd.error", output=out[-1500:]),
             parse_mode=PARSE_MODE,
             reply_markup=kb_back_menu(lang),
         )
-        return
-
-    uuid_val = xray_svc.get_uuid_by_name(name)
-    if not uuid_val:
-        update.effective_message.reply_text(t(lang, "admin.cmd.created_uuid_missing"), reply_markup=kb_back_menu(lang))
         return
 
     ensure_xray_caps(name, uuid_val)
@@ -75,14 +72,12 @@ def list_cmd(update: Update, context: CallbackContext) -> None:
     if not guard(update):
         return
     lang = get_locale_for_update(update)
-    code, names, raw = xray_svc.list_users()
-    if code != 0:
-        update.effective_message.reply_text(
-            t(lang, "admin.cmd.list_error", output=raw[-1500:]),
-            parse_mode=PARSE_MODE,
-            reply_markup=kb_back_menu(lang),
-        )
-        return
+    subs = subs_store.read()
+    names = sorted(
+        name
+        for name, rec in subs.items()
+        if not str(name).startswith("_") and isinstance(rec, dict) and rec.get("uuid")
+    )
     if not names:
         update.effective_message.reply_text(t(lang, "admin.cmd.list_empty"), reply_markup=kb_back_menu(lang))
         return
