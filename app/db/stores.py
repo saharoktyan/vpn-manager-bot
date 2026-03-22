@@ -71,20 +71,36 @@ class SQLiteSubscriptionsStore:
 
     def write(self, data: Dict[str, Any]) -> None:
         with self.db.transaction() as conn:
+            names: List[str] = [
+                str(name)
+                for name in sorted(data.keys())
+                if isinstance(data.get(name), dict)
+            ]
             conn.execute("DELETE FROM profile_access_methods")
             conn.execute("DELETE FROM xray_transports")
             conn.execute("DELETE FROM xray_profiles")
             conn.execute("DELETE FROM subscriptions")
-            conn.execute("DELETE FROM profiles")
+            if names:
+                placeholders = ",".join("?" for _ in names)
+                conn.execute(
+                    f"DELETE FROM profiles WHERE name NOT IN ({placeholders})",
+                    names,
+                )
+            else:
+                conn.execute("DELETE FROM profiles")
 
-            for name in sorted(data.keys()):
+            for name in names:
                 rec = data.get(name)
-                if not isinstance(rec, dict):
-                    continue
                 created_at = rec.get("created_at")
                 updated_at = rec.get("updated_at") or created_at
                 conn.execute(
-                    "INSERT INTO profiles(name, created_at, updated_at) VALUES (?, ?, ?)",
+                    """
+                    INSERT INTO profiles(name, created_at, updated_at)
+                    VALUES (?, ?, ?)
+                    ON CONFLICT(name) DO UPDATE SET
+                        created_at=excluded.created_at,
+                        updated_at=excluded.updated_at
+                    """,
                     (name, created_at, updated_at),
                 )
                 conn.execute(
