@@ -488,7 +488,7 @@ def on_menu_callback(update: Update, context: CallbackContext, payload: str) -> 
 
     if payload.startswith("admin_request_card:") and is_admin:
         _request_capture_message(update, context)
-        user_id = payload.split(":", 2)[2]
+        user_id = payload.rsplit(":", 1)[-1]
         state = _request_state_get(context) or {}
         ids = state.get("ids") if isinstance(state.get("ids"), list) else _all_pending_request_ids()
         state.update({"active": True, "step": "card", "ids": ids, "selected_user_id": user_id})
@@ -500,7 +500,7 @@ def on_menu_callback(update: Update, context: CallbackContext, payload: str) -> 
     if payload.startswith("admin_request_approve:") and is_admin:
         from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
-        req_user_id = int(payload.split(":", 2)[2])
+        req_user_id = int(payload.rsplit(":", 1)[-1])
         profile_name = _ensure_profile_for_request(req_user_id)
         _set_admin_flag(req_user_id, access_granted=True, access_request_pending=False, profile_name=profile_name)
         try:
@@ -523,7 +523,7 @@ def on_menu_callback(update: Update, context: CallbackContext, payload: str) -> 
         return
 
     if payload.startswith("admin_request_reject:") and is_admin:
-        req_user_id = int(payload.split(":", 2)[2])
+        req_user_id = int(payload.rsplit(":", 1)[-1])
         _set_admin_flag(req_user_id, access_granted=False, access_request_pending=False)
         try:
             context.bot.send_message(chat_id=req_user_id, text=t(get_user_locale(req_user_id), "admin.requests.notify_rejected"))
