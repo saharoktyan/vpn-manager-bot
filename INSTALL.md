@@ -58,7 +58,7 @@ What bootstrap currently does:
 - prepares node config files
 - deploys Xray as a container
 - deploys AWG as a container
-- installs helper scripts used by the bot
+- installs helper scripts and node runtime files under `/opt/vpn-manager-node`
 
 ## 5. Create the first profile
 

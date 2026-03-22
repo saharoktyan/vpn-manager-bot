@@ -25,7 +25,7 @@ def _env_int_list(name: str) -> list[int]:
 BOT_TOKEN = _env_str("BOT_TOKEN")
 ADMIN_IDS = _env_int_list("ADMIN_IDS")
 
-BASE_DIR = _env_str("VPN_BOT_BASE_DIR", "/opt/vpn-bot")
+BASE_DIR = _env_str("VPN_BOT_BASE_DIR", "/opt/vpn-manager-bot")
 APP_DIR = f"{BASE_DIR}/app"
 DATA_DIR = f"{BASE_DIR}/data"
 

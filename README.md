@@ -53,8 +53,14 @@ Then:
 ## Runtime Layout
 
 ```bash
-/opt/vpn-bot
+/opt/vpn-manager-bot
   ├─ app/
   ├─ data/
   └─ ssh/
+
+/opt/vpn-manager-node
+  ├─ xray/
+  ├─ amnezia-awg/
+  ├─ *.sh / helper scripts
+  └─ node runtime files
 ```

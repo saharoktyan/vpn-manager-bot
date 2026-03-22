@@ -10,10 +10,10 @@ services:
     env_file:
       - .env
     environment:
-      VPN_BOT_BASE_DIR: /opt/vpn-bot
+      VPN_BOT_BASE_DIR: /opt/vpn-manager-bot
       TZ: UTC
     volumes:
-      - ./data:/opt/vpn-bot/data
+      - ./data:/opt/vpn-manager-bot/data
       - ./ssh:/root/.ssh
-    working_dir: /opt/vpn-bot/app
+    working_dir: /opt/vpn-manager-bot/app
     command: sh -c "python manage_db.py init && python main.py"

@@ -52,9 +52,9 @@ def add_user(name: str, server_key: Optional[str] = None, uuid_value: Optional[s
         return 1, f"Server {server_key} not found"
 
     if uuid_value:
-        cmd = f"/opt/add-user-existing.sh {shlex.quote(name)} {shlex.quote(uuid_value)}"
+        cmd = f"/opt/vpn-manager-node/add-user-existing.sh {shlex.quote(name)} {shlex.quote(uuid_value)}"
     else:
-        cmd = f"echo {shlex.quote(name)} | /opt/add-user.sh"
+        cmd = f"echo {shlex.quote(name)} | /opt/vpn-manager-node/add-user.sh"
     return run_server_command(server, cmd, timeout=120)
 
 
@@ -65,7 +65,7 @@ def list_users(server_key: Optional[str] = None) -> Tuple[int, List[str], str]:
     server = get_server(server_key)
     if not server:
         return 1, [], f"Server {server_key} not found"
-    code, out = run_server_command(server, "/opt/list-users.sh", timeout=60)
+    code, out = run_server_command(server, "/opt/vpn-manager-node/list-users.sh", timeout=60)
     if code != 0:
         return code, [], out
     lines = out.strip().splitlines()
@@ -121,7 +121,7 @@ def delete_user(name: str, server_key: Optional[str] = None) -> Tuple[int, str]:
     server = get_server(server_key)
     if not server:
         return 1, f"Server {server_key} not found"
-    cmd = f"/opt/del-user.sh {shlex.quote(name)}"
+    cmd = f"/opt/vpn-manager-node/del-user.sh {shlex.quote(name)}"
     return run_server_command(server, cmd, timeout=120)
 
 

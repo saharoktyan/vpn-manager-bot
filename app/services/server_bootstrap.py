@@ -12,19 +12,19 @@ log = logging.getLogger("server_bootstrap")
 
 
 NODE_ENV_EXAMPLE = """# Xray
-XRAY_CONFIG=/opt/vpn-bot/xray/config.json
+XRAY_CONFIG=/opt/vpn-manager-node/xray/config.json
 XRAY_CONTAINER_NAME=xray
-XRAY_DOCKER_DIR=/opt/vpn-bot/xray
+XRAY_DOCKER_DIR=/opt/vpn-manager-node/xray
 XRAY_DOCKER_IMAGE=ghcr.io/xtls/xray-core:25.12.8
 XRAY_INBOUND_TCP_TAG=reality-tcp
 XRAY_INBOUND_XHTTP_TAG=reality-xhttp
 
 # AWG / AmneziaWG
 AWG_CONTAINER_NAME=amnezia-awg
-AWG_DOCKER_DIR=/opt/vpn-bot/amnezia-awg
+AWG_DOCKER_DIR=/opt/vpn-manager-node/amnezia-awg
 AWG_DOCKER_IMAGE=vpn-bot-amnezia-awg:latest
 AWG_IFACE=wg0
-AWG_CONFIG=/opt/vpn-bot/amnezia-awg/data/wg0.conf
+AWG_CONFIG=/opt/vpn-manager-node/amnezia-awg/data/wg0.conf
 AWG_SERVER_ADDRESS=10.8.1.0/24
 AWG_NETWORK=10.8.1.0/24
 AWG_DNS=1.1.1.1
@@ -300,7 +300,7 @@ echo "OK"
 XRAY_INIT_SCRIPT = """#!/usr/bin/env bash
 set -euo pipefail
 
-CONFIG_PATH="${1:-/opt/vpn-bot/xray/config.json}"
+CONFIG_PATH="${1:-/opt/vpn-manager-node/xray/config.json}"
 PUBLIC_HOST="${2:-}"
 SNI_HOST="${3:-www.cloudflare.com}"
 TCP_PORT="${4:-443}"
@@ -431,7 +431,7 @@ PY
 XRAY_SYNC_SCRIPT = """#!/usr/bin/env bash
 set -euo pipefail
 
-CONFIG_PATH="${1:-/opt/vpn-bot/xray/config.json}"
+CONFIG_PATH="${1:-/opt/vpn-manager-node/xray/config.json}"
 PUBLIC_HOST="${2:-}"
 FLOW="${3:-xtls-rprx-vision}"
 IMAGE="${4:-ghcr.io/xtls/xray-core:25.12.8}"
@@ -557,10 +557,10 @@ docker_cmd() {
   exit 1
 }
 
-DOCKER_DIR="${XRAY_DOCKER_DIR:-/opt/vpn-bot/xray}"
+DOCKER_DIR="${XRAY_DOCKER_DIR:-/opt/vpn-manager-node/xray}"
 IMAGE="${XRAY_DOCKER_IMAGE:-ghcr.io/xtls/xray-core:25.12.8}"
 CONTAINER="${XRAY_CONTAINER_NAME:-xray}"
-CONFIG="${XRAY_CONFIG:-/opt/vpn-bot/xray/config.json}"
+CONFIG="${XRAY_CONFIG:-/opt/vpn-manager-node/xray/config.json}"
 
 mkdir -p "$DOCKER_DIR"
 
@@ -823,16 +823,16 @@ docker_cmd() {
 
 CONTAINER="${AWG_CONTAINER_NAME:-amnezia-awg}"
 IFACE="${AWG_IFACE:-wg0}"
-CFG="${AWG_CONFIG:-/opt/vpn-bot/amnezia-awg/data/wg0.conf}"
+CFG="${AWG_CONFIG:-/opt/vpn-manager-node/amnezia-awg/data/wg0.conf}"
 SERVER_IP="${AWG_SERVER_IP:-}"
 SERVER_PORT="${AWG_SERVER_PORT:-51820}"
 CLIENT_DNS="${AWG_DNS:-1.1.1.1}"
 CLIENT_MTU="${AWG_MTU:-1280}"
 ALLOWED_IPS="${AWG_ALLOWED_IPS:-0.0.0.0/0}"
 KEEPALIVE="${AWG_KEEPALIVE:-25}"
-CONF2VPN="${AWG_CONF2VPN:-/opt/vpn-bot/conf2vpn.py}"
-AWG_TEMPLATE="${AWG_TEMPLATE:-/opt/vpn-bot/awg-template.json}"
-AMNEZIA_DECODER="${AWG_DECODER:-/opt/vpn-bot/amnezia-config-decoder.py}"
+CONF2VPN="${AWG_CONF2VPN:-/opt/vpn-manager-node/conf2vpn.py}"
+AWG_TEMPLATE="${AWG_TEMPLATE:-/opt/vpn-manager-node/awg-template.json}"
+AMNEZIA_DECODER="${AWG_DECODER:-/opt/vpn-manager-node/amnezia-config-decoder.py}"
 NAME="${1:-}"
 
 if [[ -z "$NAME" ]]; then
@@ -991,7 +991,7 @@ docker_cmd() {
 }
 
 CONTAINER="${AWG_CONTAINER_NAME:-amnezia-awg}"
-CFG="${AWG_CONFIG:-/opt/vpn-bot/amnezia-awg/data/wg0.conf}"
+CFG="${AWG_CONFIG:-/opt/vpn-manager-node/amnezia-awg/data/wg0.conf}"
 NAME="${1:-}"
 if [[ -z "$NAME" ]]; then
   echo "Usage: $0 <name>" >&2
@@ -1021,7 +1021,7 @@ AWG_INIT_SCRIPT = """#!/usr/bin/env bash
 set -euo pipefail
 source /etc/vpn-bot/node.env
 
-CFG="${AWG_CONFIG:-/opt/vpn-bot/amnezia-awg/data/wg0.conf}"
+CFG="${AWG_CONFIG:-/opt/vpn-manager-node/amnezia-awg/data/wg0.conf}"
 IFACE="${AWG_IFACE:-wg0}"
 SERVER_ADDR="${AWG_SERVER_ADDRESS:-10.8.1.0/24}"
 PORT="${AWG_SERVER_PORT:-51820}"
@@ -1241,10 +1241,10 @@ docker_cmd() {
   exit 1
 }
 
-DOCKER_DIR="${AWG_DOCKER_DIR:-/opt/vpn-bot/amnezia-awg}"
+DOCKER_DIR="${AWG_DOCKER_DIR:-/opt/vpn-manager-node/amnezia-awg}"
 IMAGE="${AWG_DOCKER_IMAGE:-vpn-bot-amnezia-awg:latest}"
 CONTAINER="${AWG_CONTAINER_NAME:-amnezia-awg}"
-CFG="${AWG_CONFIG:-/opt/vpn-bot/amnezia-awg/data/wg0.conf}"
+CFG="${AWG_CONFIG:-/opt/vpn-manager-node/amnezia-awg/data/wg0.conf}"
 IFACE="${AWG_IFACE:-wg0}"
 
 mkdir -p "$DOCKER_DIR/data"
@@ -1283,7 +1283,7 @@ if command -v apt-get >/dev/null 2>&1; then
   fi
 fi
 systemctl enable --now docker >/dev/null 2>&1 || service docker start >/dev/null 2>&1 || true
-mkdir -p /etc/vpn-bot /opt/vpn-bot /opt/vpn-bot/xray /opt/vpn-bot/amnezia-awg/data
+mkdir -p /etc/vpn-bot /opt/vpn-manager-node /opt/vpn-manager-node/xray /opt/vpn-manager-node/amnezia-awg/data
 touch /etc/vpn-bot/node.env
 """
 
@@ -1296,15 +1296,15 @@ def render_server_node_env(server: RegisteredServer) -> str:
     return (
         f"XRAY_CONFIG={server.xray_config_path}\n"
         f"XRAY_CONTAINER_NAME={server.xray_service_name}\n"
-        f"XRAY_DOCKER_DIR=/opt/vpn-bot/xray\n"
+        f"XRAY_DOCKER_DIR=/opt/vpn-manager-node/xray\n"
         f"XRAY_DOCKER_IMAGE=ghcr.io/xtls/xray-core:25.12.8\n"
         f"XRAY_INBOUND_TCP_TAG=reality-tcp\n"
         f"XRAY_INBOUND_XHTTP_TAG=reality-xhttp\n"
         f"AWG_CONTAINER_NAME=amnezia-awg\n"
-        f"AWG_DOCKER_DIR=/opt/vpn-bot/amnezia-awg\n"
+        f"AWG_DOCKER_DIR=/opt/vpn-manager-node/amnezia-awg\n"
         f"AWG_DOCKER_IMAGE=vpn-bot-amnezia-awg:latest\n"
         f"AWG_IFACE={server.awg_iface}\n"
-        f"AWG_CONFIG=/opt/vpn-bot/amnezia-awg/data/{server.awg_iface}.conf\n"
+        f"AWG_CONFIG=/opt/vpn-manager-node/amnezia-awg/data/{server.awg_iface}.conf\n"
         f"AWG_SERVER_ADDRESS=10.8.1.0/24\n"
         f"AWG_NETWORK=10.8.1.0/24\n"
         f"AWG_DNS=1.1.1.1\n"
@@ -1346,7 +1346,7 @@ def sync_xray_server_settings(server_key: str) -> Tuple[int, str]:
         server,
         " ".join(
             [
-                "/opt/vpn-bot/sync-xray.sh",
+                "/opt/vpn-manager-node/sync-xray.sh",
                 server.xray_config_path,
                 server.public_host,
                 server.xray_flow,
@@ -1377,21 +1377,21 @@ def bootstrap_server(server_key: str) -> Tuple[int, str]:
 
     files = {
         "/etc/vpn-bot/node.env.example": NODE_ENV_EXAMPLE,
-        "/opt/vpn-bot/init-xray.sh": XRAY_INIT_SCRIPT,
-        "/opt/vpn-bot/sync-xray.sh": XRAY_SYNC_SCRIPT,
-        "/opt/vpn-bot/deploy-xray.sh": XRAY_DEPLOY_SCRIPT,
-        "/opt/vpn-bot/add-user.sh": XRAY_ADD_SCRIPT,
-        "/opt/vpn-bot/add-user-existing.sh": XRAY_ADD_EXISTING_SCRIPT,
-        "/opt/vpn-bot/list-users.sh": XRAY_LIST_SCRIPT,
-        "/opt/vpn-bot/del-user.sh": XRAY_DEL_SCRIPT,
-        "/opt/vpn-bot/conf2vpn.py": AWG_CONF2VPN_PY,
-        "/opt/vpn-bot/amnezia-config-decoder.py": AMNEZIA_CONFIG_DECODER_PY,
-        "/opt/vpn-bot/awg-template.json": AWG_TEMPLATE_JSON,
-        "/opt/vpn-bot/add-awg-user.sh": AWG_ADD_SCRIPT,
-        "/opt/vpn-bot/del-awg-user.sh": AWG_DEL_SCRIPT,
-        "/opt/vpn-bot/init-awg.sh": AWG_INIT_SCRIPT,
-        "/opt/vpn-bot/amnezia-awg/Dockerfile": AWG_DOCKERFILE,
-        "/opt/vpn-bot/deploy-awg.sh": AWG_DEPLOY_SCRIPT,
+        "/opt/vpn-manager-node/init-xray.sh": XRAY_INIT_SCRIPT,
+        "/opt/vpn-manager-node/sync-xray.sh": XRAY_SYNC_SCRIPT,
+        "/opt/vpn-manager-node/deploy-xray.sh": XRAY_DEPLOY_SCRIPT,
+        "/opt/vpn-manager-node/add-user.sh": XRAY_ADD_SCRIPT,
+        "/opt/vpn-manager-node/add-user-existing.sh": XRAY_ADD_EXISTING_SCRIPT,
+        "/opt/vpn-manager-node/list-users.sh": XRAY_LIST_SCRIPT,
+        "/opt/vpn-manager-node/del-user.sh": XRAY_DEL_SCRIPT,
+        "/opt/vpn-manager-node/conf2vpn.py": AWG_CONF2VPN_PY,
+        "/opt/vpn-manager-node/amnezia-config-decoder.py": AMNEZIA_CONFIG_DECODER_PY,
+        "/opt/vpn-manager-node/awg-template.json": AWG_TEMPLATE_JSON,
+        "/opt/vpn-manager-node/add-awg-user.sh": AWG_ADD_SCRIPT,
+        "/opt/vpn-manager-node/del-awg-user.sh": AWG_DEL_SCRIPT,
+        "/opt/vpn-manager-node/init-awg.sh": AWG_INIT_SCRIPT,
+        "/opt/vpn-manager-node/amnezia-awg/Dockerfile": AWG_DOCKERFILE,
+        "/opt/vpn-manager-node/deploy-awg.sh": AWG_DEPLOY_SCRIPT,
     }
     for path, content in files.items():
         file_rc, file_out = write_server_file(server, path, content, mode="0755" if path.endswith(".sh") else "0644")
@@ -1404,27 +1404,13 @@ def bootstrap_server(server_key: str) -> Tuple[int, str]:
         _mark(server, "bootstrap_failed", node_env_out[-1500:])
         return node_env_rc, node_env_out
 
-    rc, out = run_server_command(
-        server,
-        "ln -sf /opt/vpn-bot/add-user.sh /opt/add-user.sh && "
-        "ln -sf /opt/vpn-bot/add-user-existing.sh /opt/add-user-existing.sh && "
-        "ln -sf /opt/vpn-bot/list-users.sh /opt/list-users.sh && "
-        "ln -sf /opt/vpn-bot/del-user.sh /opt/del-user.sh && "
-        "ln -sf /opt/vpn-bot/add-awg-user.sh /opt/add-awg-user.sh && "
-        "ln -sf /opt/vpn-bot/del-awg-user.sh /opt/del-awg-user.sh",
-        timeout=60,
-    )
-    if rc != 0:
-        _mark(server, "bootstrap_failed", out[-1500:])
-        return rc, out
-
     if "xray" in server.protocol_kinds:
         sni_host = server.xray_sni or "www.cloudflare.com"
         rc, out = run_server_command(
             server,
             " ".join(
                 [
-                    "/opt/vpn-bot/init-xray.sh",
+                    "/opt/vpn-manager-node/init-xray.sh",
                     server.xray_config_path,
                     server.public_host,
                     sni_host,
@@ -1449,17 +1435,17 @@ def bootstrap_server(server_key: str) -> Tuple[int, str]:
             _mark(server, "bootstrap_failed", out[-1500:])
             return 1, f"Generated Xray settings are incomplete:\n{out[-1500:]}"
         update_server_fields(server.key, **generated)
-        rc, out = run_server_command(server, "/opt/vpn-bot/deploy-xray.sh", timeout=300)
+        rc, out = run_server_command(server, "/opt/vpn-manager-node/deploy-xray.sh", timeout=300)
         if rc != 0:
             _mark(server, "bootstrap_failed", out[-1500:])
             return rc, out
 
     if "awg" in server.protocol_kinds:
-        rc, out = run_server_command(server, "/opt/vpn-bot/init-awg.sh", timeout=120)
+        rc, out = run_server_command(server, "/opt/vpn-manager-node/init-awg.sh", timeout=120)
         if rc != 0:
             _mark(server, "bootstrap_failed", out[-1500:])
             return rc, out
-        rc, out = run_server_command(server, "/opt/vpn-bot/deploy-awg.sh", timeout=900)
+        rc, out = run_server_command(server, "/opt/vpn-manager-node/deploy-awg.sh", timeout=900)
         if rc != 0:
             _mark(server, "bootstrap_failed", out[-1500:])
             return rc, out

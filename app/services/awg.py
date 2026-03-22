@@ -16,7 +16,7 @@ def create_awg_user(server_key: str, name: str) -> Tuple[int, str, str]:
     server = get_server(server_key)
     if not server:
         return 1, "", f"Unknown server: {server_key}"
-    code, out = run_server_command(server, f"/opt/add-awg-user.sh {shlex.quote(name)}", timeout=120)
+    code, out = run_server_command(server, f"/opt/vpn-manager-node/add-awg-user.sh {shlex.quote(name)}", timeout=120)
     log.info("AWG create server=%s name=%s rc=%s", server_key, name, code)
     return code, out, out
 
@@ -25,7 +25,7 @@ def delete_awg_user(server_key: str, name: str) -> Tuple[int, str]:
     server = get_server(server_key)
     if not server:
         return 1, f"Unknown server: {server_key}"
-    code, out = run_server_command(server, f"/opt/del-awg-user.sh {shlex.quote(name)}", timeout=120)
+    code, out = run_server_command(server, f"/opt/vpn-manager-node/del-awg-user.sh {shlex.quote(name)}", timeout=120)
     log.info("AWG delete server=%s name=%s rc=%s", server_key, name, code)
     return code, out
 
