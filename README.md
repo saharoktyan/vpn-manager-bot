@@ -1,18 +1,35 @@
-# vpn-bot
+# vpn-manager-bot
 
-Telegram bot for issuing VPN configs and managing Xray/AWG nodes.
+Telegram bot for provisioning VPN access and managing VPN nodes.
 
-This repo contains the current control-plane version of the bot.
+The bot runs as a control plane: it can live on any VPS or in Docker, while VPN nodes are registered and managed separately over SSH.
 
-## What it does
+## Features
 
-The bot is built as a control plane:
+- Telegram-based admin UI for managing servers and user profiles
+- SSH key onboarding directly from the bot
+- Node bootstrap from inside the bot
+- Per-server protocol provisioning
+- SQLite-based local state
+- User key issuance with QR codes and fallback config download
+- Russian and English interface support
 
-- the bot itself can run on any VPS or inside Docker
-- VPN nodes are registered separately
-- nodes can be bootstrapped from inside the bot
-- Xray and AWG are managed per node, not via hardcoded countries
-- storage is SQLite-based
+## Supported Protocols
+
+Current protocol support:
+
+- `VLESS` over `Xray Reality`
+  - transports: `tcp`, `xhttp`
+- `AmneziaWG`
+
+## Container Images
+
+The project currently uses these runtime images for protocol nodes:
+
+- Xray: `ghcr.io/xtls/xray-core:25.12.8`
+- AmneziaWG base image: `amneziavpn/amneziawg-go:latest`
+
+For AWG nodes, the bot builds and deploys its own wrapper image on the target host during bootstrap.
 
 ## Quick Start
 
@@ -24,14 +41,13 @@ docker compose up -d --build
 Then:
 
 1. Open the bot as admin.
-2. Open `Админ: SSH ключ` and add the generated public key to the target server.
-3. Open `Админ: серверы`, add a server, then run `Probe` and `Bootstrap`.
-4. Open `Админ: профили`, create a profile.
+2. Open `Admin -> SSH Key` and add the generated public key to the target server.
+3. Open `Admin -> Servers`, add a server, then run `Probe` and `Bootstrap`.
+4. Open `Admin -> Profiles`, create a profile.
 5. Test key issuance from a normal Telegram account.
 
 ## Docs
 
-- [`README.md`](/home/saharoktyan/projects/vpn-bot-public/README.md) — project overview
 - [`INSTALL.md`](/home/saharoktyan/projects/vpn-bot-public/INSTALL.md) — first-time setup and deployment
 
 ## Runtime Layout

@@ -12,8 +12,8 @@ This project is deployed from the repo root.
 ## 1. Prepare the bot host
 
 ```bash
-git clone <your-repo-url> vpn-bot
-cd vpn-bot
+git clone <your-repo-url> vpn-manager-bot
+cd vpn-manager-bot
 cp .env.example .env
 mkdir -p data ssh
 ```
@@ -37,7 +37,7 @@ docker compose up -d --build
 Inside Telegram:
 
 1. Open the bot as admin
-2. Open `Админ: SSH ключ`
+2. Open `Admin -> SSH Key`
 3. Copy the generated public key
 4. Add it to `~/.ssh/authorized_keys` on the target node
 
@@ -45,7 +45,7 @@ Inside Telegram:
 
 Inside Telegram:
 
-1. Open `Админ: серверы`
+1. Open `Admin -> Servers`
 2. Add a server
 3. Open the server card
 4. Run `Probe`
@@ -64,7 +64,7 @@ What bootstrap currently does:
 
 Inside Telegram:
 
-1. Open `Админ: профили`
+1. Open `Admin -> Profiles`
 2. Create a profile
 3. Select one or more protocols/server methods
 4. Set subscription duration
@@ -74,7 +74,7 @@ Inside Telegram:
 From another Telegram account:
 
 1. Open the bot
-2. Use `Получить ключ`
+2. Use `Get Key`
 3. Test:
    - Xray URI + QR
    - AWG `vpn://` + QR
