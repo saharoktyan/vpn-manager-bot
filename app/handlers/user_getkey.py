@@ -215,7 +215,7 @@ def on_getkey_callback(update: Update, context: CallbackContext, payload: str) -
                 update,
                 context,
                 t(lang, "getkey.awg_key_missing"),
-                reply_markup=kb_back_to_main(lang),
+                reply_markup=kb_awg_key_actions(server_key, _server_back_payload(method.server_key), lang),
                 parse_mode=PARSE_MODE,
             )
             return
@@ -327,7 +327,7 @@ def on_getkey_callback(update: Update, context: CallbackContext, payload: str) -
                 update,
                 context,
                 t(lang, "getkey.awg_profile_missing"),
-                reply_markup=kb_back_to_main(lang),
+                reply_markup=kb_awg_key_actions(server_key, _server_back_payload(server_key), lang),
                 parse_mode=PARSE_MODE,
             )
             return

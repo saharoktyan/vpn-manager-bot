@@ -29,7 +29,7 @@ def render_proto_keyboard(selected: Set[str], lang: str = "ru") -> InlineKeyboar
     rows.append(
         [
             InlineKeyboardButton("✅ Далее" if lang == "ru" else "✅ Next", callback_data=f"{CB_CFG}proto:done"),
-            InlineKeyboardButton(t(lang, "admin.wizard.cancel"), callback_data=f"{CB_CFG}cancel"),
+            InlineKeyboardButton(t(lang, "menu.back"), callback_data=f"{CB_CFG}back"),
         ]
     )
     return InlineKeyboardMarkup(rows)
@@ -81,7 +81,6 @@ def render_sub_keyboard(lang: str = "ru") -> InlineKeyboardMarkup:
                 InlineKeyboardButton("✏️ Другое" if lang == "ru" else "✏️ Custom", callback_data=f"{CB_CFG}sub:custom"),
                 InlineKeyboardButton(t(lang, "menu.back"), callback_data=f"{CB_CFG}back"),
             ],
-            [InlineKeyboardButton(t(lang, "admin.wizard.cancel"), callback_data=f"{CB_CFG}cancel")],
         ]
     )
 
@@ -105,7 +104,7 @@ def render_pick(names: List[str], page: int, lang: str = "ru") -> Tuple[str, Inl
         nav.append(InlineKeyboardButton("Next ➡️", callback_data=f"{CB_CFG}pickpage:{page+1}"))
     rows.append(nav)
     rows.append([InlineKeyboardButton(t(lang, "admin.wizard.search"), callback_data=f"{CB_CFG}search")])
-    rows.append([InlineKeyboardButton(t(lang, "admin.wizard.cancel"), callback_data=f"{CB_CFG}cancel")])
+    rows.append([InlineKeyboardButton(t(lang, "menu.back"), callback_data=f"{CB_CFG}cancel")])
     return t(lang, "admin.wizard.choose_profile", total=total), InlineKeyboardMarkup(rows)
 
 
@@ -129,7 +128,7 @@ def render_profile_dashboard(names: List[str], page: int, lang: str = "ru") -> T
     rows.append(nav)
     rows.append([InlineKeyboardButton(t(lang, "admin.wizard.search"), callback_data=f"{CB_CFG}search")])
     rows.append([InlineKeyboardButton(t(lang, "admin.wizard.new_profile"), callback_data=f"{CB_CFG}start:create")])
-    rows.append([InlineKeyboardButton(t(lang, "admin.wizard.cancel"), callback_data=f"{CB_CFG}cancel")])
+    rows.append([InlineKeyboardButton(t(lang, "menu.back"), callback_data=f"{CB_CFG}cancel")])
     return t(lang, "admin.wizard.profiles", total=total), InlineKeyboardMarkup(rows)
 
 
@@ -163,7 +162,7 @@ def render_edit_menu(name: str, protocols: Set[str], sub_days: Optional[int], fr
                     InlineKeyboardButton("🗑 Удалить профиль" if lang == "ru" else "🗑 Delete Profile", callback_data=f"{CB_CFG}edit:delete"),
                 ],
                 [InlineKeyboardButton("⬅️ К профилю" if lang == "ru" else "⬅️ To Profile", callback_data=f"{CB_CFG}card:{name}")],
-                [InlineKeyboardButton(t(lang, "admin.wizard.cancel"), callback_data=f"{CB_CFG}cancel")],
+                [InlineKeyboardButton(t(lang, "menu.back"), callback_data=f"{CB_CFG}cancel")],
             ]
         ),
     )

@@ -107,7 +107,6 @@ def _step_nav_markup(
     show_back: bool = True,
     next_payload: str | None = None,
     back_payload: str | None = None,
-    close_payload: str | None = None,
 ) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
     nav_row: list[InlineKeyboardButton] = []
@@ -117,7 +116,6 @@ def _step_nav_markup(
         nav_row.append(InlineKeyboardButton(t(lang, "admin.wizard.next"), callback_data=next_payload))
     if nav_row:
         rows.append(nav_row)
-    rows.append([InlineKeyboardButton(t(lang, "admin.wizard.close"), callback_data=close_payload or f"{CB_SRV}list")])
     return InlineKeyboardMarkup(rows)
 
 
@@ -140,7 +138,6 @@ def _transport_markup(lang: str) -> InlineKeyboardMarkup:
                 InlineKeyboardButton(t(lang, "menu.back"), callback_data=f"{CB_SRV}back"),
                 InlineKeyboardButton(t(lang, "admin.wizard.next"), callback_data=f"{CB_SRV}next"),
             ],
-            [InlineKeyboardButton(t(lang, "admin.wizard.close"), callback_data=f"{CB_SRV}list")],
         ]
     )
 
@@ -157,7 +154,6 @@ def _protocol_markup(selected: Set[str], lang: str) -> InlineKeyboardMarkup:
                 InlineKeyboardButton(t(lang, "menu.back"), callback_data=f"{CB_SRV}back"),
                 InlineKeyboardButton("✅ Далее" if lang == "ru" else "✅ Next", callback_data=f"{CB_SRV}protocol:done"),
             ],
-            [InlineKeyboardButton(t(lang, "admin.wizard.close"), callback_data=f"{CB_SRV}list")],
         ]
     )
 
@@ -168,7 +164,6 @@ def _pick_server_markup(servers: Sequence[RegisteredServer], lang: str) -> Inlin
         for server in servers
     ]
     rows.append([InlineKeyboardButton(t(lang, "menu.back"), callback_data=f"{CB_SRV}list")])
-    rows.append([InlineKeyboardButton(t(lang, "admin.wizard.close"), callback_data=f"{CB_SRV}list")])
     return InlineKeyboardMarkup(rows)
 
 
@@ -404,11 +399,7 @@ def _summary_markup(lang: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
             [InlineKeyboardButton("💾 Сохранить" if lang == "ru" else "💾 Save", callback_data=f"{CB_SRV}save")],
-            [
-                InlineKeyboardButton(t(lang, "menu.back"), callback_data=f"{CB_SRV}back"),
-                InlineKeyboardButton(t(lang, "admin.wizard.next"), callback_data=f"{CB_SRV}save"),
-            ],
-            [InlineKeyboardButton(t(lang, "admin.wizard.close"), callback_data=f"{CB_SRV}list")],
+            [InlineKeyboardButton(t(lang, "menu.back"), callback_data=f"{CB_SRV}back")],
         ]
     )
 
@@ -431,8 +422,7 @@ def _render_step_prompt(context: CallbackContext, lang: str, step: str, data: Di
         else t(lang, "admin.wizard.server_enter_public_host"),
         "notes": "Введи заметки для сервера или `.` чтобы оставить как есть." if lang == "ru" else "Enter server notes or `.` to keep the current value.",
     }
-    show_back = step != "key"
-    _wizard_edit(context, prompts[step], _step_nav_markup(lang, show_back=show_back, next_payload=f"{CB_SRV}next", close_payload=f"{CB_SRV}list"))
+    _wizard_edit(context, prompts[step], _step_nav_markup(lang, show_back=True, next_payload=f"{CB_SRV}next"))
 
 
 def serverwizard_cmd(update: Update, context: CallbackContext) -> None:
@@ -666,6 +656,12 @@ def on_server_callback(update: Update, context: CallbackContext, payload: str) -
 
     if payload == "back":
         if w["mode"] == "create":
+            if w["step"] == "key":
+                servers = list_servers(include_disabled=True)
+                w["step"] = "menu"
+                _wizard_set(context, w)
+                _wizard_edit(context, _server_dashboard_text(servers, lang), _server_dashboard_markup(servers, lang))
+                return
             if w["step"] == "title":
                 w["step"] = "key"
                 _wizard_set(context, w)
@@ -732,7 +728,7 @@ def on_server_callback(update: Update, context: CallbackContext, payload: str) -
                 else:
                     w["step"] = "title"
                     _wizard_set(context, w)
-                    _wizard_edit(context, t(lang, "admin.wizard.server_edit", key=data["key"], title=data["title"]), _step_nav_markup(lang, next_payload=f"{CB_SRV}next", close_payload=f"{CB_SRV}list"))
+                    _wizard_edit(context, t(lang, "admin.wizard.server_edit", key=data["key"], title=data["title"]), _step_nav_markup(lang, next_payload=f"{CB_SRV}next"))
                 return
             if w["step"] == "region":
                 if w.get("edit_single"):
@@ -851,7 +847,7 @@ def on_server_callback(update: Update, context: CallbackContext, payload: str) -
         _wizard_edit(
             context,
             t(lang, "admin.wizard.server_edit", key=_md(server_key), title=_md(server.title)),
-            _step_nav_markup(lang, next_payload=f"{CB_SRV}next", close_payload=f"{CB_SRV}list"),
+            _step_nav_markup(lang, next_payload=f"{CB_SRV}next"),
         )
         return
 
@@ -892,7 +888,7 @@ def on_server_callback(update: Update, context: CallbackContext, payload: str) -
             _wizard_edit(
                 context,
                 t(lang, "admin.wizard.server_enter_public_host_local"),
-                _step_nav_markup(lang, next_payload=f"{CB_SRV}next", close_payload=f"{CB_SRV}list"),
+                _step_nav_markup(lang, next_payload=f"{CB_SRV}next"),
             )
             w["step"] = "public_host"
             _wizard_set(context, w)
@@ -940,7 +936,7 @@ def on_server_callback(update: Update, context: CallbackContext, payload: str) -
             w["step"] = "notes"
             _wizard_set(context, w)
             prompt = "Введи заметки для сервера или `.` чтобы оставить как есть." if lang == "ru" else "Enter server notes or `.` to keep the current value."
-            _wizard_edit(context, prompt, _step_nav_markup(lang, next_payload=f"{CB_SRV}next", close_payload=f"{CB_SRV}list"))
+            _wizard_edit(context, prompt, _step_nav_markup(lang, next_payload=f"{CB_SRV}next"))
             return
         field_prompts = {
             "title": t(lang, "admin.wizard.server_create_title"),
@@ -952,7 +948,7 @@ def on_server_callback(update: Update, context: CallbackContext, payload: str) -
         if field in field_prompts:
             w["step"] = field
             _wizard_set(context, w)
-            _wizard_edit(context, field_prompts[field], _step_nav_markup(lang, next_payload=f"{CB_SRV}next", close_payload=f"{CB_SRV}list"))
+            _wizard_edit(context, field_prompts[field], _step_nav_markup(lang, next_payload=f"{CB_SRV}next"))
             return
 
     if payload == "editsave":

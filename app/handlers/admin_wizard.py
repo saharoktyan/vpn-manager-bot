@@ -134,7 +134,7 @@ def createcfg_cmd(update: Update, context: CallbackContext) -> None:
     sent = update.effective_message.reply_text(
         t(lang, "admin.wizard.create_title"),
         parse_mode=PARSE_MODE,
-        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(t(lang, "admin.wizard.cancel"), callback_data=f"{CB_CFG}cancel")]]),
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(t(lang, "menu.back"), callback_data=f"{CB_CFG}back")]]),
     )
     w = _wizard_init(sent, "create")
     w["locale"] = lang
@@ -179,7 +179,7 @@ def cfg_wizard_text(update: Update, context: CallbackContext) -> None:
             _wizard_edit(
                 context,
                 t(lang, "admin.wizard.name_empty"),
-                InlineKeyboardMarkup([[InlineKeyboardButton(t(lang, "admin.wizard.cancel"), callback_data=f"{CB_CFG}cancel")]]),
+                InlineKeyboardMarkup([[InlineKeyboardButton(t(lang, "menu.back"), callback_data=f"{CB_CFG}back")]]),
             )
             safe_delete_update_message(update, context)
             return
@@ -226,7 +226,6 @@ def cfg_wizard_text(update: Update, context: CallbackContext) -> None:
                 InlineKeyboardMarkup(
                     [
                         [InlineKeyboardButton(t(lang, "menu.back"), callback_data=f"{CB_CFG}back")],
-                        [InlineKeyboardButton(t(lang, "admin.wizard.cancel"), callback_data=f"{CB_CFG}cancel")],
                     ]
                 ),
             )
@@ -235,7 +234,6 @@ def cfg_wizard_text(update: Update, context: CallbackContext) -> None:
         matches = matches[:30]
         rows = [[InlineKeyboardButton(f"👤 {name}", callback_data=f"{CB_CFG}card:{name}")] for name in matches]
         rows.append([InlineKeyboardButton(t(lang, "menu.back"), callback_data=f"{CB_CFG}back")])
-        rows.append([InlineKeyboardButton(t(lang, "admin.wizard.cancel"), callback_data=f"{CB_CFG}cancel")])
         _wizard_edit(
             context,
             t(lang, "admin.wizard.search_results", count=len(matches), query=q),
@@ -375,7 +373,7 @@ def on_cfg_callback(update: Update, context: CallbackContext, payload: str) -> N
                 msg.chat_id,
                 msg.message_id,
                 t(lang, "admin.wizard.create_title"),
-                InlineKeyboardMarkup([[InlineKeyboardButton(t(lang, "admin.wizard.cancel"), callback_data=f"{CB_CFG}cancel")]]),
+                InlineKeyboardMarkup([[InlineKeyboardButton(t(lang, "menu.back"), callback_data=f"{CB_CFG}back")]]),
                 parse_mode=PARSE_MODE,
             )
             w = _wizard_init(msg, "create")
@@ -422,7 +420,6 @@ def on_cfg_callback(update: Update, context: CallbackContext, payload: str) -> N
             InlineKeyboardMarkup(
                 [
                     [InlineKeyboardButton(t(lang, "menu.back"), callback_data=f"{CB_CFG}back")],
-                    [InlineKeyboardButton(t(lang, "admin.wizard.cancel"), callback_data=f"{CB_CFG}cancel")],
                 ]
             ),
         )
@@ -430,13 +427,21 @@ def on_cfg_callback(update: Update, context: CallbackContext, payload: str) -> N
 
     if payload == "back":
         if w["mode"] == "create":
+            if w["step"] == "name":
+                w["all_names"] = _get_all_names()
+                w["pick_page"] = 0
+                w["mode"] = "edit"
+                w["step"] = "pick"
+                _wizard_set(context, w)
+                _wizard_edit(context, *_render_profile_dashboard(w["all_names"], w["pick_page"], lang))
+                return
             if w["step"] == "proto":
                 w["step"] = "name"
                 _wizard_set(context, w)
                 _wizard_edit(
                     context,
                     t(lang, "admin.wizard.enter_name"),
-                    InlineKeyboardMarkup([[InlineKeyboardButton(t(lang, "admin.wizard.cancel"), callback_data=f"{CB_CFG}cancel")]]),
+                    InlineKeyboardMarkup([[InlineKeyboardButton(t(lang, "menu.back"), callback_data=f"{CB_CFG}back")]]),
                 )
                 return
             if w["step"] in ("sub", "sub_custom"):

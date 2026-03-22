@@ -134,8 +134,7 @@ def kb_profile_minimal(lang: str = "ru") -> InlineKeyboardMarkup:
 
 def kb_profile_stats(is_admin: bool, lang: str = "ru") -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton(t(lang, "menu.profile"), callback_data=f"{CB_MENU}profile")],
-        [InlineKeyboardButton(t(lang, "menu.back"), callback_data=f"{CB_MENU}main")],
+        [InlineKeyboardButton(t(lang, "menu.back"), callback_data=f"{CB_MENU}profile")],
     ])
 
 
