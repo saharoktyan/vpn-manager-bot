@@ -28,11 +28,15 @@ def kb_main_menu(is_admin: bool, has_access: bool, lang: str = "ru") -> InlineKe
 def kb_admin_menu(lang: str = "ru") -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
         [InlineKeyboardButton(t(lang, "menu.status"), callback_data=f"{CB_MENU}admin_status")],
-        [InlineKeyboardButton(t(lang, "menu.profiles"), callback_data=f"{CB_CFG}start:edit")],
+        [
+            InlineKeyboardButton(t(lang, "menu.profiles"), callback_data=f"{CB_CFG}start:edit"),
+            InlineKeyboardButton(t(lang, "menu.requests"), callback_data=f"{CB_MENU}admin_requests"),
+        ],
         [InlineKeyboardButton(t(lang, "menu.servers"), callback_data=f"{CB_SRV}menu")],
-        [InlineKeyboardButton(t(lang, "menu.requests"), callback_data=f"{CB_MENU}admin_requests")],
-        [InlineKeyboardButton(t(lang, "menu.ssh_key"), callback_data=f"{CB_MENU}sshkey")],
-        [InlineKeyboardButton(t(lang, "menu.admin_settings"), callback_data=f"{CB_MENU}admin_settings")],
+        [
+            InlineKeyboardButton(t(lang, "menu.ssh_key"), callback_data=f"{CB_MENU}sshkey"),
+            InlineKeyboardButton(t(lang, "menu.admin_settings"), callback_data=f"{CB_MENU}admin_settings"),
+        ],
         [InlineKeyboardButton(t(lang, "menu.back"), callback_data=f"{CB_MENU}main")],
     ])
 
