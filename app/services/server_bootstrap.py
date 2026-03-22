@@ -1893,7 +1893,47 @@ def probe_server(server_key: str) -> Tuple[int, str]:
     server = get_server(server_key)
     if not server:
         return 1, f"Server {server_key} not found"
-    return run_server_command(server, "hostname && whoami && uname -a", timeout=20)
+    cmd = """#!/usr/bin/env bash
+set -euo pipefail
+
+echo "hostname: $(hostname)"
+echo "user: $(whoami)"
+echo "kernel: $(uname -a)"
+
+if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
+  echo "docker: ok"
+elif command -v sudo >/dev/null 2>&1 && sudo docker info >/dev/null 2>&1; then
+  echo "docker: ok (sudo)"
+else
+  echo "docker: unavailable"
+fi
+
+if [[ -c /dev/net/tun ]]; then
+  echo "tun: ok"
+else
+  echo "tun: missing"
+fi
+
+if [[ -c /dev/net/tun ]] && { (command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1) || (command -v sudo >/dev/null 2>&1 && sudo docker info >/dev/null 2>&1); }; then
+  echo "awg_userspace_ready: yes"
+else
+  echo "awg_userspace_ready: no"
+fi
+"""
+    rc, out = run_server_command(server, cmd, timeout=20)
+    if rc == 0:
+        lines = [line.strip() for line in (out or "").splitlines() if line.strip()]
+        summary = []
+        for prefix in ("docker:", "tun:", "awg_userspace_ready:"):
+            hit = next((line for line in lines if line.startswith(prefix)), None)
+            if hit:
+                summary.append(hit)
+        if summary:
+            try:
+                update_server_fields(server.key, notes="probe: " + " | ".join(summary))
+            except Exception:
+                pass
+    return rc, out
 
 
 def sync_xray_server_settings(server_key: str) -> Tuple[int, str]:
