@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import logging
 import os
@@ -14,6 +15,13 @@ from services.ssh_keys import ensure_ssh_keypair
 
 
 log = logging.getLogger("server_runtime")
+
+
+def _ssh_control_path(server: RegisteredServer) -> str:
+    target = server.ssh_target or server.key
+    raw = f"{server.key}:{target}:{server.ssh_port or 22}:{server.ssh_key_path or ''}"
+    digest = hashlib.sha1(raw.encode("utf-8")).hexdigest()[:20]
+    return f"/tmp/vpn-manager-bot-ssh-{digest}"
 
 
 def is_running_in_container() -> bool:
@@ -53,6 +61,7 @@ def _ssh_command(server: RegisteredServer, command: str) -> str:
     target = server.ssh_target
     if not target:
         raise ValueError(f"SSH target is not configured for server {server.key}")
+    control_path = _ssh_control_path(server)
     opts = [
         "ssh",
         "-o",
@@ -65,6 +74,12 @@ def _ssh_command(server: RegisteredServer, command: str) -> str:
         "ServerAliveInterval=10",
         "-o",
         "ServerAliveCountMax=2",
+        "-o",
+        "ControlMaster=auto",
+        "-o",
+        "ControlPersist=60",
+        "-o",
+        f"ControlPath={control_path}",
         "-p",
         str(server.ssh_port or 22),
     ]

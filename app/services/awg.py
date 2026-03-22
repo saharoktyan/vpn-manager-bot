@@ -17,6 +17,9 @@ def create_awg_user(server_key: str, name: str) -> Tuple[int, str, str]:
     if not server:
         return 1, "", f"Unknown server: {server_key}"
     code, out = run_server_command(server, f"/opt/vpn-manager-node/awg-add-user.sh {shlex.quote(name)}", timeout=120)
+    if code != 0 and _extract_wg_conf(out or ""):
+        log.warning("AWG create server=%s name=%s recovered from rc=%s because config was extracted", server_key, name, code)
+        return 0, out, out
     log.info("AWG create server=%s name=%s rc=%s", server_key, name, code)
     return code, out, out
 

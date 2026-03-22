@@ -206,6 +206,7 @@ cfg_path="$CONFIG"
 tmp_path="$tmp"
 name="$TAG"
 uuid="$UUID"
+short_id="$SHORT_ID"
 tcp_tag="$TCP_TAG"
 xhttp_tag="$XHTTP_TAG"
 
@@ -1665,6 +1666,7 @@ set -euo pipefail
 IFACE="${AWG_IFACE:-wg0}"
 CFG="${AWG_CONFIG_FILE:-/opt/amnezia/awg/wg0.conf}"
 NETWORK="${AWG_NETWORK:-10.8.1.0/24}"
+LISTEN_PORT="${AWG_LISTEN_PORT:-51820}"
 export WG_QUICK_USERSPACE_IMPLEMENTATION="${WG_QUICK_USERSPACE_IMPLEMENTATION:-amneziawg-go}"
 PUB_IFACE="$(ip route get 1.1.1.1 | awk '/dev/ {for (i=1;i<=NF;i++) if ($i==\"dev\") {print $(i+1); exit}}')"
 
@@ -1789,6 +1791,12 @@ IMAGE="${AWG_DOCKER_IMAGE:-vpn-bot-amnezia-awg:latest}"
 CONTAINER="${AWG_CONTAINER_NAME:-amnezia-awg}"
 CFG="${AWG_CONFIG:-/opt/vpn-manager-node/amnezia-awg/data/wg0.conf}"
 IFACE="${AWG_IFACE:-wg0}"
+PORT="${AWG_SERVER_PORT:-51820}"
+
+if [[ ! -c /dev/net/tun ]]; then
+  echo "/dev/net/tun is not available on this host. AWG userspace runtime cannot start." >&2
+  exit 1
+fi
 
 mkdir -p "$DOCKER_DIR/data"
 docker_cmd build -t "$IMAGE" "$DOCKER_DIR"
@@ -1800,14 +1808,23 @@ fi
 docker_cmd run -d \
   --name "$CONTAINER" \
   --restart unless-stopped \
-  --privileged \
-  --network host \
+  --cap-add NET_ADMIN \
+  --device /dev/net/tun:/dev/net/tun \
+  --sysctl net.ipv4.ip_forward=1 \
   -e AWG_IFACE="$IFACE" \
   -e AWG_CONFIG_FILE="/opt/amnezia/awg/$(basename "$CFG")" \
   -e AWG_NETWORK="${AWG_NETWORK:-10.8.1.0/24}" \
+  -e AWG_LISTEN_PORT="$PORT" \
+  -p "$PORT:$PORT/udp" \
   -v "$DOCKER_DIR/data:/opt/amnezia/awg" \
-  -v /lib/modules:/lib/modules:ro \
   "$IMAGE" >/dev/null
+
+sleep 2
+if ! docker_cmd ps --format '{{.Names}}' | grep -q "^${CONTAINER}$"; then
+  echo "AWG container failed to start." >&2
+  docker_cmd logs "$CONTAINER" >&2 || true
+  exit 1
+fi
 
 echo "AWG container deployed: $CONTAINER"
 """
