@@ -17,3 +17,5 @@ services:
       - ./ssh:/root/.ssh
     working_dir: /opt/vpn-manager-bot/app
     command: sh -c "python manage_db.py init && python main.py"
+    init: true
+    stop_grace_period: 30s
