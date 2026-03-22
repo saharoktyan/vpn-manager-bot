@@ -5,7 +5,7 @@ from typing import Any, Dict, List, Optional, Sequence, Set
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import CallbackContext
 
-from config import CB_SRV, PARSE_MODE
+from config import CB_MENU, CB_SRV, PARSE_MODE
 from i18n import get_locale_for_update, t
 from services.provisioning_state import reconcile_server_state, render_server_provisioning_summary, summarize_server_provisioning
 from services.server_bootstrap import bootstrap_server, probe_server, sync_server_node_env, sync_xray_server_settings
@@ -124,7 +124,7 @@ def _server_menu_markup(lang: str) -> InlineKeyboardMarkup:
         [
             [InlineKeyboardButton(t(lang, "admin.wizard.new_server"), callback_data=f"{CB_SRV}start:create")],
             [InlineKeyboardButton(t(lang, "admin.wizard.edit_server"), callback_data=f"{CB_SRV}start:edit")],
-            [InlineKeyboardButton(t(lang, "menu.back"), callback_data=f"{CB_SRV}cancel")],
+            [InlineKeyboardButton(t(lang, "menu.back"), callback_data=f"{CB_MENU}admin")],
         ]
     )
 
@@ -250,7 +250,7 @@ def _server_dashboard_markup(servers: Sequence[RegisteredServer], lang: str) -> 
         for server in servers
     ]
     rows.append([InlineKeyboardButton(t(lang, "admin.wizard.new_server"), callback_data=f"{CB_SRV}start:create")])
-    rows.append([InlineKeyboardButton(t(lang, "menu.back"), callback_data=f"{CB_SRV}cancel")])
+    rows.append([InlineKeyboardButton(t(lang, "menu.back"), callback_data=f"{CB_MENU}admin")])
     return InlineKeyboardMarkup(rows)
 
 
