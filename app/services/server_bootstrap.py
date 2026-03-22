@@ -1633,7 +1633,7 @@ for key, value in values.items():
     if re.search(pattern, text):
         text = re.sub(pattern, replacement, text, count=1)
     else:
-        text = re.sub(r"(?m)^(H4 = .*)$", r"\\1\n" + replacement, text, count=1)
+        text = re.sub(r"(?m)^(H4 = .*)$", r"\\1\\n" + replacement, text, count=1)
 
 with open(tmp_path, "w", encoding="utf-8") as fh:
     fh.write(text)
