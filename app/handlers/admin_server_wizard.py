@@ -994,7 +994,13 @@ def on_server_callback(update: Update, context: CallbackContext, payload: str) -
             ssh_host=target or None,
             bootstrap_state="new" if w["mode"] == "create" else "edited",
         )
-        _wizard_close(
+        servers = list_servers(include_disabled=True)
+        w["mode"] = "menu"
+        w["step"] = "menu"
+        w["server_key"] = server.key
+        w["data"] = _load_server_into_data(server)
+        _wizard_set(context, w)
+        _wizard_edit(
             context,
             t(
                 lang,
@@ -1004,7 +1010,10 @@ def on_server_callback(update: Update, context: CallbackContext, payload: str) -
                 server_key=server.key,
                 transport=server.transport,
                 protocols=", ".join(server.protocol_kinds),
-            ),
+            )
+            + "\n\n"
+            + _server_dashboard_text(servers, lang),
+            _server_dashboard_markup(servers, lang),
         )
 
 

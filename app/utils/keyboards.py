@@ -87,7 +87,7 @@ def kb_xray_transport(method_payload: str, back_payload: Optional[str] = None, l
 def kb_xray_key_actions(method_payload: str, transport: str, back_payload: Optional[str] = None, lang: str = "ru") -> InlineKeyboardMarkup:
     back_target = back_payload or f"{CB_GETKEY}menu"
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("📷 Показать QR", callback_data=f"{CB_GETKEY}xray_qr:{method_payload}:{transport}")],
+        [InlineKeyboardButton(t(lang, "getkey.show_qr"), callback_data=f"{CB_GETKEY}xray_qr:{method_payload}:{transport}")],
         [InlineKeyboardButton(t(lang, "menu.back"), callback_data=back_target)],
     ])
 
@@ -111,10 +111,14 @@ def kb_back_to_getkey_menu(items: Optional[Sequence[Tuple[str, str]]] = None, la
 def kb_awg_key_actions(region: str, back_payload: Optional[str] = None, lang: str = "ru") -> InlineKeyboardMarkup:
     back_target = back_payload or f"{CB_GETKEY}menu"
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("📷 Показать QR", callback_data=f"{CB_GETKEY}awg_qr:{region}")],
-        [InlineKeyboardButton("⬇️ Скачать .conf", callback_data=f"{CB_GETKEY}awg_conf:{region}")],
+        [InlineKeyboardButton(t(lang, "getkey.show_qr"), callback_data=f"{CB_GETKEY}awg_qr:{region}")],
+        [InlineKeyboardButton(t(lang, "getkey.download_conf"), callback_data=f"{CB_GETKEY}awg_conf:{region}")],
         [InlineKeyboardButton(t(lang, "menu.back"), callback_data=back_target)],
     ])
+
+
+def kb_getkey_attachment_back(callback_data: str, lang: str = "ru") -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([[InlineKeyboardButton(t(lang, "menu.back"), callback_data=callback_data)]])
 
 def kb_profile_actions(is_admin: bool, lang: str = "ru") -> InlineKeyboardMarkup:
     rows = [

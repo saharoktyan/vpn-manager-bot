@@ -5,7 +5,7 @@ import logging
 from typing import Tuple
 
 from services.server_registry import RegisteredServer, get_server, update_server_fields
-from services.server_runtime import run_server_command, write_server_file
+from services.server_runtime import run_server_command, write_server_file, write_server_files
 
 
 log = logging.getLogger("server_bootstrap")
@@ -1598,30 +1598,29 @@ def bootstrap_server(server_key: str) -> Tuple[int, str]:
         return rc, out
 
     files = {
-        "/etc/vpn-bot/node.env.example": NODE_ENV_EXAMPLE,
-        "/opt/vpn-manager-node/init-xray.sh": XRAY_INIT_SCRIPT,
-        "/opt/vpn-manager-node/sync-xray.sh": XRAY_SYNC_SCRIPT,
-        "/opt/vpn-manager-node/deploy-xray.sh": XRAY_DEPLOY_SCRIPT,
-        "/opt/vpn-manager-node/xray-enable-stats.sh": XRAY_ENABLE_STATS_SCRIPT,
-        "/opt/vpn-manager-node/xray-add-user.sh": XRAY_ADD_SCRIPT,
-        "/opt/vpn-manager-node/xray-add-user-existing.sh": XRAY_ADD_EXISTING_SCRIPT,
-        "/opt/vpn-manager-node/xray-list-users.sh": XRAY_LIST_SCRIPT,
-        "/opt/vpn-manager-node/xray-list-traffic.sh": XRAY_TRAFFIC_SCRIPT,
-        "/opt/vpn-manager-node/xray-del-user.sh": XRAY_DEL_SCRIPT,
-        "/opt/vpn-manager-node/conf2vpn.py": AWG_CONF2VPN_PY,
-        "/opt/vpn-manager-node/amnezia-config-decoder.py": AMNEZIA_CONFIG_DECODER_PY,
-        "/opt/vpn-manager-node/awg-template.json": AWG_TEMPLATE_JSON,
-        "/opt/vpn-manager-node/awg-add-user.sh": AWG_ADD_SCRIPT,
-        "/opt/vpn-manager-node/awg-del-user.sh": AWG_DEL_SCRIPT,
-        "/opt/vpn-manager-node/init-awg.sh": AWG_INIT_SCRIPT,
-        "/opt/vpn-manager-node/amnezia-awg/Dockerfile": AWG_DOCKERFILE,
-        "/opt/vpn-manager-node/deploy-awg.sh": AWG_DEPLOY_SCRIPT,
+        "/etc/vpn-bot/node.env.example": (NODE_ENV_EXAMPLE, "0644"),
+        "/opt/vpn-manager-node/init-xray.sh": (XRAY_INIT_SCRIPT, "0755"),
+        "/opt/vpn-manager-node/sync-xray.sh": (XRAY_SYNC_SCRIPT, "0755"),
+        "/opt/vpn-manager-node/deploy-xray.sh": (XRAY_DEPLOY_SCRIPT, "0755"),
+        "/opt/vpn-manager-node/xray-enable-stats.sh": (XRAY_ENABLE_STATS_SCRIPT, "0755"),
+        "/opt/vpn-manager-node/xray-add-user.sh": (XRAY_ADD_SCRIPT, "0755"),
+        "/opt/vpn-manager-node/xray-add-user-existing.sh": (XRAY_ADD_EXISTING_SCRIPT, "0755"),
+        "/opt/vpn-manager-node/xray-list-users.sh": (XRAY_LIST_SCRIPT, "0755"),
+        "/opt/vpn-manager-node/xray-list-traffic.sh": (XRAY_TRAFFIC_SCRIPT, "0755"),
+        "/opt/vpn-manager-node/xray-del-user.sh": (XRAY_DEL_SCRIPT, "0755"),
+        "/opt/vpn-manager-node/conf2vpn.py": (AWG_CONF2VPN_PY, "0644"),
+        "/opt/vpn-manager-node/amnezia-config-decoder.py": (AMNEZIA_CONFIG_DECODER_PY, "0644"),
+        "/opt/vpn-manager-node/awg-template.json": (AWG_TEMPLATE_JSON, "0644"),
+        "/opt/vpn-manager-node/awg-add-user.sh": (AWG_ADD_SCRIPT, "0755"),
+        "/opt/vpn-manager-node/awg-del-user.sh": (AWG_DEL_SCRIPT, "0755"),
+        "/opt/vpn-manager-node/init-awg.sh": (AWG_INIT_SCRIPT, "0755"),
+        "/opt/vpn-manager-node/amnezia-awg/Dockerfile": (AWG_DOCKERFILE, "0644"),
+        "/opt/vpn-manager-node/deploy-awg.sh": (AWG_DEPLOY_SCRIPT, "0755"),
     }
-    for path, content in files.items():
-        file_rc, file_out = write_server_file(server, path, content, mode="0755" if path.endswith(".sh") else "0644")
-        if file_rc != 0:
-            _mark(server, "bootstrap_failed", file_out[-1500:])
-            return file_rc, file_out
+    file_rc, file_out = write_server_files(server, files, timeout=180)
+    if file_rc != 0:
+        _mark(server, "bootstrap_failed", file_out[-1500:])
+        return file_rc, file_out
 
     node_env_rc, node_env_out = write_server_file(server, "/etc/vpn-bot/node.env", render_server_node_env(server), mode="0644")
     if node_env_rc != 0:

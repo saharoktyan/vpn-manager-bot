@@ -762,7 +762,16 @@ def _finish_create(context: CallbackContext) -> None:
         lines.append("\nОшибки:")
         lines.extend(f"• {err}" for err in errors)
 
-    _wizard_close(context, "\n".join(lines))
+    names = _get_all_names()
+    w["all_names"] = names
+    w["pick_page"] = 0
+    w["step"] = "pick"
+    _wizard_set(context, w)
+    _wizard_edit_plain(
+        context,
+        "\n".join(lines) + "\n\nНиже можно выбрать следующий профиль.",
+        _render_profile_dashboard(names, 0, _wizard_lang(context))[1] if names else kb_back_menu(_wizard_lang(context)),
+    )
 
 
 def _save_edit(context: CallbackContext) -> None:

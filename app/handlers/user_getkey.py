@@ -19,6 +19,7 @@ from services.subscriptions import _extract_vpn_key, ensure_xray_caps, get_allow
 from ui.user_views import render_getkey_overview, render_server_menu
 from utils.keyboards import (
     kb_awg_key_actions,
+    kb_getkey_attachment_back,
     kb_back_to_getkey_menu,
     kb_back_to_main,
     kb_getkey_server_methods,
@@ -27,7 +28,7 @@ from utils.keyboards import (
     kb_xray_key_actions,
     kb_xray_transport,
 )
-from utils.tg import answer_cb, safe_edit_message
+from utils.tg import answer_cb, safe_delete_update_message, safe_edit_message
 
 from .user_common import (
     _conf_msg_key,
@@ -57,10 +58,29 @@ def _build_qr_bytes(data: str) -> io.BytesIO:
     return buf
 
 
-def _send_qr(context: CallbackContext, chat_id: int, data: str, caption: str) -> None:
+def _artifact_msg_key(kind: str, token: str) -> str:
+    return f"getkey_artifact:{kind}:{token}"
+
+
+def _delete_all_getkey_artifacts(context: CallbackContext, chat_id: int) -> None:
+    for key in [item for item in list(context.user_data.keys()) if str(item).startswith("getkey_artifact:")]:
+        msg_id = context.user_data.get(key)
+        if msg_id:
+            try:
+                context.bot.delete_message(chat_id=chat_id, message_id=int(msg_id))
+            except Exception:
+                pass
+        context.user_data.pop(key, None)
+
+
+def _send_qr(context: CallbackContext, chat_id: int, data: str, caption: str, reply_markup=None):
     qr = _build_qr_bytes(data)
     qr.name = "key.png"
-    context.bot.send_photo(chat_id=chat_id, photo=qr, caption=caption)
+    return context.bot.send_photo(chat_id=chat_id, photo=qr, caption=caption, reply_markup=reply_markup)
+
+
+def _send_main_getkey_message(context: CallbackContext, chat_id: int, text: str, reply_markup, parse_mode: str | None = PARSE_MODE) -> None:
+    context.bot.send_message(chat_id=chat_id, text=text, reply_markup=reply_markup, parse_mode=parse_mode, disable_web_page_preview=True)
 
 
 def _xray_help_text(method: AccessMethod, transport: str, link: str, lang: str) -> str:
@@ -84,6 +104,34 @@ def _awg_help_text(method: AccessMethod, vpn_key: str | None, has_conf: bool, la
     return "\n".join(lines)
 
 
+def _render_awg_main_screen(name: str, method: AccessMethod, lang: str):
+    rec = get_awg_server(name, method.server_key)
+    if not isinstance(rec, dict) or not (rec.get("config") or rec.get("wg_conf")):
+        return t(lang, "getkey.awg_config_missing"), kb_back_to_getkey_menu([(f"server:{method.server_key}", f"{method.server.flag} {method.server.title}")], lang)
+    key = _extract_vpn_key(str(rec.get("config") or ""))
+    if not key:
+        wg_conf = rec.get("wg_conf") or _extract_wg_conf(str(rec.get("config") or ""))
+        if wg_conf and not rec.get("wg_conf"):
+            rec["wg_conf"] = wg_conf
+            update_awg_server(name, method.server_key, rec)
+        if wg_conf:
+            return _awg_help_text(method, None, True, lang), kb_awg_key_actions(method.server_key, _server_back_payload(method.server_key), lang)
+        return t(lang, "getkey.awg_key_missing"), kb_awg_key_actions(method.server_key, _server_back_payload(method.server_key), lang)
+    return _awg_help_text(method, key, True, lang), kb_awg_key_actions(method.server_key, _server_back_payload(method.server_key), lang)
+
+
+def _render_xray_main_screen(name: str, method: AccessMethod, transport: str, lang: str):
+    rec = get_profile(name)
+    uuid_val = rec.get("uuid") if isinstance(rec, dict) else None
+    if not uuid_val:
+        return t(lang, "getkey.uuid_missing"), kb_xray_transport(method.getkey_payload, _server_back_payload(method.server_key), lang)
+    try:
+        link = xray_svc.build_vless_link_transport(name, uuid_val, transport, method.server_key)
+    except ValueError as exc:
+        return t(lang, "getkey.xray_not_ready", error=exc), kb_xray_transport(method.getkey_payload, _server_back_payload(method.server_key), lang)
+    return _xray_help_text(method, transport, link, lang), kb_xray_key_actions(method.getkey_payload, transport, _server_back_payload(method.server_key), lang)
+
+
 def on_getkey_callback(update: Update, context: CallbackContext, payload: str) -> None:
     answer_cb(update)
     chat_id = update.effective_chat.id if update.effective_chat else None
@@ -95,6 +143,7 @@ def on_getkey_callback(update: Update, context: CallbackContext, payload: str) -
     lang = get_locale_for_update(update)
 
     if payload == "menu":
+        _delete_all_getkey_artifacts(context, chat_id)
         _delete_all_awg_conf(context, chat_id)
         profile_name = _resolve_profile_name(user.id if user else None)
         if not user or not profile_name:
@@ -140,6 +189,7 @@ def on_getkey_callback(update: Update, context: CallbackContext, payload: str) -
         return
 
     if payload.startswith("server:"):
+        _delete_all_getkey_artifacts(context, chat_id)
         profile_name = _resolve_profile_name(user.id if user else None)
         if not user or not profile_name:
             return
@@ -167,6 +217,7 @@ def on_getkey_callback(update: Update, context: CallbackContext, payload: str) -
 
     method = get_access_method_by_getkey_payload(payload)
     if method and method.protocol_kind == "xray":
+        _delete_all_getkey_artifacts(context, chat_id)
         safe_edit_message(
             update,
             context,
@@ -178,55 +229,14 @@ def on_getkey_callback(update: Update, context: CallbackContext, payload: str) -
         return
 
     if method and method.protocol_kind == "awg":
+        _delete_all_getkey_artifacts(context, chat_id)
         profile_name = _resolve_profile_name(user.id if user else None)
         if not user or not profile_name:
             return
         name = profile_name
         server_key = method.server_key
-        rec = get_awg_server(name, server_key)
-
-        if not isinstance(rec, dict) or not (rec.get("config") or rec.get("wg_conf")):
-            safe_edit_message(
-                update,
-                context,
-                t(lang, "getkey.awg_config_missing"),
-                reply_markup=kb_back_to_getkey_menu([(f"server:{method.server_key}", f"{method.server.flag} {method.server.title}")], lang),
-                parse_mode=PARSE_MODE,
-            )
-            return
-
-        key = _extract_vpn_key(str(rec.get("config") or ""))
-        if not key:
-            wg_conf = rec.get("wg_conf") or _extract_wg_conf(str(rec.get("config") or ""))
-            if wg_conf:
-                if not rec.get("wg_conf"):
-                    rec["wg_conf"] = wg_conf
-                    update_awg_server(name, server_key, rec)
-                safe_edit_message(
-                    update,
-                    context,
-                    _awg_help_text(method, None, True, lang),
-                    reply_markup=kb_awg_key_actions(server_key, _server_back_payload(method.server_key), lang),
-                    parse_mode=PARSE_MODE,
-                )
-                _touch_key_stat(context, user.id)
-                return
-            safe_edit_message(
-                update,
-                context,
-                t(lang, "getkey.awg_key_missing"),
-                reply_markup=kb_awg_key_actions(server_key, _server_back_payload(method.server_key), lang),
-                parse_mode=PARSE_MODE,
-            )
-            return
-
-        safe_edit_message(
-            update,
-            context,
-            _awg_help_text(method, key, True, lang),
-            reply_markup=kb_awg_key_actions(server_key, _server_back_payload(method.server_key), lang),
-            parse_mode=PARSE_MODE,
-        )
+        text, markup = _render_awg_main_screen(name, method, lang)
+        safe_edit_message(update, context, text, reply_markup=markup, parse_mode=PARSE_MODE)
         _touch_key_stat(context, user.id)
         return
 
@@ -277,6 +287,7 @@ def on_getkey_callback(update: Update, context: CallbackContext, payload: str) -
         return
 
     if payload.startswith("xray_qr:"):
+        _delete_all_getkey_artifacts(context, chat_id)
         profile_name = _resolve_profile_name(user.id if user else None)
         if not user or not profile_name:
             return
@@ -300,21 +311,38 @@ def on_getkey_callback(update: Update, context: CallbackContext, payload: str) -
                 parse_mode=PARSE_MODE,
             )
             return
-        try:
-            link = xray_svc.build_vless_link_transport(name, uuid_val, transport, method.server_key)
-        except ValueError as exc:
-            safe_edit_message(
-                update,
-                context,
-                t(lang, "getkey.xray_not_ready", error=exc),
-                reply_markup=kb_xray_transport(method_payload, _server_back_payload(method.server_key), lang),
-                parse_mode=PARSE_MODE,
-            )
+        link = xray_svc.build_vless_link_transport(name, uuid_val, transport, method.server_key)
+        sent = _send_qr(
+            context,
+            chat_id,
+            link,
+            f"{method.label} — {transport}",
+            reply_markup=kb_getkey_attachment_back(f"getkey:xray_qr_back:{method_payload}:{transport}", lang),
+        )
+        context.user_data[_artifact_msg_key("xray_qr", f"{method_payload}:{transport}")] = sent.message_id
+        safe_delete_update_message(update, context)
+        return
+
+    if payload.startswith("xray_qr_back:"):
+        profile_name = _resolve_profile_name(user.id if user else None)
+        if not user or not profile_name:
             return
-        _send_qr(context, chat_id, link, f"{method.label} — {transport}")
+        _delete_all_getkey_artifacts(context, chat_id)
+        safe_delete_update_message(update, context)
+        parts = payload.split(":")
+        if len(parts) != 3:
+            return
+        method_payload = parts[1]
+        transport = parts[2]
+        method = get_access_method_by_getkey_payload(method_payload)
+        if not method:
+            return
+        text, markup = _render_xray_main_screen(profile_name, method, transport, lang)
+        _send_main_getkey_message(context, chat_id, text, markup, PARSE_MODE)
         return
 
     if payload.startswith("awg_qr:"):
+        _delete_all_getkey_artifacts(context, chat_id)
         profile_name = _resolve_profile_name(user.id if user else None)
         if not user or not profile_name:
             return
@@ -341,10 +369,33 @@ def on_getkey_callback(update: Update, context: CallbackContext, payload: str) -
                 parse_mode=PARSE_MODE,
             )
             return
-        _send_qr(context, chat_id, key, method.label)
+        sent = _send_qr(
+            context,
+            chat_id,
+            key,
+            method.label,
+            reply_markup=kb_getkey_attachment_back(f"getkey:awg_qr_back:{server_key}", lang),
+        )
+        context.user_data[_artifact_msg_key("awg_qr", server_key)] = sent.message_id
+        safe_delete_update_message(update, context)
+        return
+
+    if payload.startswith("awg_qr_back:"):
+        profile_name = _resolve_profile_name(user.id if user else None)
+        if not user or not profile_name:
+            return
+        server_key = payload.split(":", 1)[1]
+        method = get_awg_access_method_by_server_key(server_key)
+        if not method:
+            return
+        _delete_all_getkey_artifacts(context, chat_id)
+        safe_delete_update_message(update, context)
+        text, markup = _render_awg_main_screen(profile_name, method, lang)
+        _send_main_getkey_message(context, chat_id, text, markup, PARSE_MODE)
         return
 
     if payload.startswith("awg_conf:"):
+        _delete_all_getkey_artifacts(context, chat_id)
         profile_name = _resolve_profile_name(user.id if user else None)
         if not user or not profile_name:
             return
@@ -352,8 +403,6 @@ def on_getkey_callback(update: Update, context: CallbackContext, payload: str) -
         name = profile_name
         server_key = payload.split(":", 1)[1]
         awg_method = get_awg_access_method_by_server_key(server_key)
-        _delete_last_awg_conf(context, chat_id, server_key)
-
         rec = get_awg_server(name, server_key)
         if not isinstance(rec, dict):
             safe_edit_message(
@@ -384,10 +433,32 @@ def on_getkey_callback(update: Update, context: CallbackContext, payload: str) -
 
         conf_io = io.BytesIO(wg_conf.encode("utf-8"))
         conf_io.name = f"{name}_{server_key}.conf"
-        sent = context.bot.send_document(chat_id=chat_id, document=conf_io, caption=t(lang, "getkey.awg_conf_caption"))
+        sent = context.bot.send_document(
+            chat_id=chat_id,
+            document=conf_io,
+            caption=t(lang, "getkey.awg_conf_caption"),
+            reply_markup=kb_getkey_attachment_back(f"getkey:awg_conf_back:{server_key}", lang),
+        )
+        context.user_data[_artifact_msg_key("awg_conf", server_key)] = sent.message_id
         context.user_data[_conf_msg_key(server_key)] = sent.message_id
+        safe_delete_update_message(update, context)
         return
 
+    if payload.startswith("awg_conf_back:"):
+        profile_name = _resolve_profile_name(user.id if user else None)
+        if not user or not profile_name:
+            return
+        server_key = payload.split(":", 1)[1]
+        method = get_awg_access_method_by_server_key(server_key)
+        if not method:
+            return
+        _delete_all_getkey_artifacts(context, chat_id)
+        safe_delete_update_message(update, context)
+        text, markup = _render_awg_main_screen(profile_name, method, lang)
+        _send_main_getkey_message(context, chat_id, text, markup, PARSE_MODE)
+        return
+
+    _delete_all_getkey_artifacts(context, chat_id)
     safe_edit_message(
         update,
         context,

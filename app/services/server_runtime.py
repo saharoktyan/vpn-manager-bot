@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import base64
+import json
 import logging
 import os
 import shlex
 import subprocess
 import time
-from typing import Tuple
+from typing import Dict, Tuple
 
 from services.server_registry import RegisteredServer
 from services.ssh_keys import ensure_ssh_keypair
@@ -103,3 +104,26 @@ def write_server_file(server: RegisteredServer, path: str, content: str, mode: s
         f"chmod {mode} {shlex.quote(path)}"
     )
     return run_server_command(server, cmd, timeout=60)
+
+
+def write_server_files(server: RegisteredServer, files: Dict[str, Tuple[str, str]], timeout: int = 120) -> Tuple[int, str]:
+    payload_map = {
+        path: {
+            "content_b64": base64.b64encode(content.encode("utf-8")).decode("ascii"),
+            "mode": mode,
+        }
+        for path, (content, mode) in files.items()
+    }
+    payload = base64.b64encode(json.dumps(payload_map).encode("utf-8")).decode("ascii")
+    cmd = (
+        "python3 - <<'PY'\n"
+        "import base64, json, os, pathlib\n"
+        f"payload = json.loads(base64.b64decode({payload!r}).decode('utf-8'))\n"
+        "for path_str, meta in payload.items():\n"
+        "    path = pathlib.Path(path_str)\n"
+        "    path.parent.mkdir(parents=True, exist_ok=True)\n"
+        "    path.write_bytes(base64.b64decode(meta['content_b64']))\n"
+        "    os.chmod(path, int(meta['mode'], 8))\n"
+        "PY"
+    )
+    return run_server_command(server, cmd, timeout=timeout)
