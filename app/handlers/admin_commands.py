@@ -1,0 +1,356 @@
+# app/handlers/admin_commands.py
+from __future__ import annotations
+
+from datetime import timedelta
+
+from telegram import Update
+from telegram.ext import CallbackContext
+
+from config import PARSE_MODE
+from i18n import get_locale_for_update, t
+from services.server_bootstrap import bootstrap_server, probe_server, sync_xray_server_settings
+from services.server_registry import list_servers, update_server_fields, upsert_server
+from services.ssh_keys import render_public_key_guide
+from services import xray as xray_svc
+from services.subscriptions import ensure_xray_caps, subs_store, utcnow
+from config import APP_VERSION
+
+from .admin_common import guard, kb_back_menu
+
+
+def add_cmd(update: Update, context: CallbackContext) -> None:
+    if not guard(update):
+        return
+    lang = get_locale_for_update(update)
+    parts = (update.effective_message.text or "").strip().split()
+    if len(parts) < 2:
+        update.effective_message.reply_text(t(lang, "admin.cmd.add_usage"))
+        return
+    name = parts[1].lstrip("@")
+
+    update.effective_message.reply_text(t(lang, "admin.cmd.add_creating", name=name))
+    code, out = xray_svc.add_user(name)
+    if code != 0:
+        update.effective_message.reply_text(
+            t(lang, "admin.cmd.error", output=out[-1500:]),
+            parse_mode=PARSE_MODE,
+            reply_markup=kb_back_menu(lang),
+        )
+        return
+
+    uuid_val = xray_svc.get_uuid_by_name(name)
+    if not uuid_val:
+        update.effective_message.reply_text(t(lang, "admin.cmd.created_uuid_missing"), reply_markup=kb_back_menu(lang))
+        return
+
+    ensure_xray_caps(name, uuid_val)
+    update.effective_message.reply_text(
+        t(lang, "admin.cmd.ready_name_uuid", name=name, uuid=uuid_val),
+        parse_mode=PARSE_MODE,
+        reply_markup=kb_back_menu(lang),
+    )
+
+
+def del_cmd(update: Update, context: CallbackContext) -> None:
+    if not guard(update):
+        return
+    lang = get_locale_for_update(update)
+    parts = (update.effective_message.text or "").strip().split()
+    if len(parts) < 2:
+        update.effective_message.reply_text(t(lang, "admin.cmd.del_usage"))
+        return
+    name = parts[1].lstrip("@")
+    code, out = xray_svc.delete_user(name)
+    if code == 0:
+        update.effective_message.reply_text(t(lang, "admin.cmd.deleted"), reply_markup=kb_back_menu(lang))
+    else:
+        update.effective_message.reply_text(
+            t(lang, "admin.cmd.error", output=out[-1500:]),
+            parse_mode=PARSE_MODE,
+            reply_markup=kb_back_menu(lang),
+        )
+
+
+def list_cmd(update: Update, context: CallbackContext) -> None:
+    if not guard(update):
+        return
+    lang = get_locale_for_update(update)
+    code, names, raw = xray_svc.list_users()
+    if code != 0:
+        update.effective_message.reply_text(
+            t(lang, "admin.cmd.list_error", output=raw[-1500:]),
+            parse_mode=PARSE_MODE,
+            reply_markup=kb_back_menu(lang),
+        )
+        return
+    if not names:
+        update.effective_message.reply_text(t(lang, "admin.cmd.list_empty"), reply_markup=kb_back_menu(lang))
+        return
+    text = t(lang, "admin.cmd.xray_profiles") + "\n\n" + "\n".join(f"- `{name}`" for name in names)
+    update.effective_message.reply_text(text[:3900], parse_mode=PARSE_MODE, reply_markup=kb_back_menu(lang))
+
+
+def servers_cmd(update: Update, context: CallbackContext) -> None:
+    if not guard(update):
+        return
+    lang = get_locale_for_update(update)
+    servers = list_servers(include_disabled=True)
+    if not servers:
+        update.effective_message.reply_text(t(lang, "admin.cmd.no_servers"), reply_markup=kb_back_menu(lang))
+        return
+    lines = [t(lang, "admin.cmd.servers_title")]
+    for server in servers:
+        protocols = ", ".join(server.protocol_kinds) or "—"
+        target = "local" if server.transport == "local" else (server.ssh_target or "ssh:?")
+        lines.append(
+            f"\n• `{server.key}` {server.flag} *{server.title}*"
+            f"\n  region: `{server.region}`"
+            f"\n  transport: `{server.transport}` ({target})"
+            f"\n  protocols: `{protocols}`"
+            f"\n  bootstrap: `{server.bootstrap_state}`"
+        )
+    update.effective_message.reply_text("\n".join(lines)[:3900], parse_mode=PARSE_MODE, reply_markup=kb_back_menu(lang))
+
+
+def addserver_cmd(update: Update, context: CallbackContext) -> None:
+    if not guard(update):
+        return
+    lang = get_locale_for_update(update)
+    parts = (update.effective_message.text or "").strip().split()
+    if len(parts) < 7:
+        update.effective_message.reply_text(t(lang, "admin.cmd.addserver_usage"))
+        return
+    key, title, flag, region, transport, protocols = parts[1:7]
+    target = parts[7] if len(parts) >= 8 else ""
+    transport = transport.lower()
+    if transport not in {"local", "ssh"}:
+        update.effective_message.reply_text(t(lang, "admin.cmd.transport_invalid"))
+        return
+    server = upsert_server(
+        key=key,
+        title=title,
+        flag=flag,
+        region=region,
+        transport=transport,
+        protocol_kinds=protocols,
+        public_host=target if transport == "ssh" else "",
+        ssh_host=target if transport == "ssh" else None,
+        bootstrap_state="new",
+    )
+    update.effective_message.reply_text(
+        t(lang, "admin.cmd.server_registered", key=server.key, flag=server.flag, title=server.title, transport=server.transport, protocols=", ".join(server.protocol_kinds) or "—"),
+        parse_mode=PARSE_MODE,
+        reply_markup=kb_back_menu(lang),
+    )
+
+
+def probeserver_cmd(update: Update, context: CallbackContext) -> None:
+    if not guard(update):
+        return
+    lang = get_locale_for_update(update)
+    parts = (update.effective_message.text or "").strip().split()
+    if len(parts) != 2:
+        update.effective_message.reply_text(t(lang, "admin.cmd.usage_probeserver"))
+        return
+    code, out = probe_server(parts[1])
+    if code != 0:
+        update.effective_message.reply_text(
+            t(lang, "admin.cmd.probe_error", output=out[-1500:]),
+            parse_mode=PARSE_MODE,
+            reply_markup=kb_back_menu(lang),
+        )
+        return
+    update.effective_message.reply_text(
+        t(lang, "admin.cmd.probe_ok", output=out[-1500:]),
+        parse_mode=PARSE_MODE,
+        reply_markup=kb_back_menu(lang),
+    )
+
+
+def sshkey_cmd(update: Update, context: CallbackContext) -> None:
+    if not guard(update):
+        return
+    lang = get_locale_for_update(update)
+    ok, text = render_public_key_guide(lang)
+    if not ok:
+        update.effective_message.reply_text(
+            t(lang, "admin.cmd.sshkey_error", output=text[-1500:]),
+            parse_mode=PARSE_MODE,
+            reply_markup=kb_back_menu(lang),
+        )
+        return
+    update.effective_message.reply_text(text[:3900], parse_mode=None, reply_markup=kb_back_menu(lang))
+
+
+def bootstrapserver_cmd(update: Update, context: CallbackContext) -> None:
+    if not guard(update):
+        return
+    lang = get_locale_for_update(update)
+    parts = (update.effective_message.text or "").strip().split()
+    if len(parts) != 2:
+        update.effective_message.reply_text(t(lang, "admin.cmd.usage_bootstrapserver"))
+        return
+    key = parts[1]
+    update.effective_message.reply_text(t(lang, "admin.cmd.bootstrap_running", key=key), parse_mode=PARSE_MODE)
+    code, out = bootstrap_server(key)
+    if code != 0:
+        update.effective_message.reply_text(
+            t(lang, "admin.cmd.bootstrap_error", output=out[-1500:]),
+            parse_mode=PARSE_MODE,
+            reply_markup=kb_back_menu(lang),
+        )
+        return
+    update.effective_message.reply_text(
+        t(lang, "admin.cmd.bootstrap_ok", output=out),
+        parse_mode=PARSE_MODE,
+        reply_markup=kb_back_menu(lang),
+    )
+
+
+def setxrayserver_cmd(update: Update, context: CallbackContext) -> None:
+    if not guard(update):
+        return
+    lang = get_locale_for_update(update)
+    parts = (update.effective_message.text or "").strip().split()
+    if len(parts) < 6:
+        update.effective_message.reply_text(t(lang, "admin.cmd.usage_setxrayserver"))
+        return
+
+    key, host, sni, pbk, sid = parts[1:6]
+    short_id = parts[6] if len(parts) >= 7 else sid
+    tcp_port = int(parts[7]) if len(parts) >= 8 else 443
+    xhttp_port = int(parts[8]) if len(parts) >= 9 else 8443
+    path_prefix = parts[9] if len(parts) >= 10 else "/assets"
+
+    server = update_server_fields(
+        key,
+        xray_host=host,
+        xray_sni=sni,
+        xray_pbk=pbk,
+        xray_sid=sid,
+        xray_short_id=short_id,
+        xray_tcp_port=tcp_port,
+        xray_xhttp_port=xhttp_port,
+        xray_xhttp_path_prefix=path_prefix,
+    )
+    update.effective_message.reply_text(
+        t(lang, "admin.cmd.xray_settings_updated", key=server.key, host=server.xray_host, sni=server.xray_sni, tcp=server.xray_tcp_port, xhttp=server.xray_xhttp_port),
+        parse_mode=PARSE_MODE,
+        reply_markup=kb_back_menu(lang),
+    )
+
+
+def syncxrayserver_cmd(update: Update, context: CallbackContext) -> None:
+    if not guard(update):
+        return
+    lang = get_locale_for_update(update)
+    parts = (update.effective_message.text or "").strip().split()
+    if len(parts) != 2:
+        update.effective_message.reply_text(t(lang, "admin.cmd.usage_syncxrayserver"))
+        return
+    key = parts[1]
+    code, out = sync_xray_server_settings(key)
+    if code != 0:
+        update.effective_message.reply_text(
+            t(lang, "admin.cmd.sync_xray_error", output=out[-1500:]),
+            parse_mode=PARSE_MODE,
+            reply_markup=kb_back_menu(lang),
+        )
+        return
+    update.effective_message.reply_text(
+        t(lang, "admin.cmd.sync_xray_ok", key=key, output=out[:3000]),
+        parse_mode=PARSE_MODE,
+        reply_markup=kb_back_menu(lang),
+    )
+
+
+def diag_cmd(update: Update, context: CallbackContext) -> None:
+    if not guard(update):
+        return
+    lang = get_locale_for_update(update)
+    servers = list_servers(include_disabled=True)
+    xray_ready = 0
+    awg_ready = 0
+    for server in servers:
+        if "xray" in server.protocol_kinds and server.xray_pbk and server.xray_sni and server.xray_sid:
+            xray_ready += 1
+        if "awg" in server.protocol_kinds and server.bootstrap_state == "bootstrapped":
+            awg_ready += 1
+    text = (
+        f"{t(lang, 'admin.cmd.diag_title')}\n\n"
+        f"version: `{APP_VERSION}`\n"
+        f"servers_total: `{len(servers)}`\n"
+        f"xray_ready: `{xray_ready}`\n"
+        f"awg_ready: `{awg_ready}`\n"
+    )
+    update.effective_message.reply_text(text, parse_mode=PARSE_MODE, reply_markup=kb_back_menu(lang))
+
+
+def sub_cmd(update: Update, context: CallbackContext) -> None:
+    if not guard(update):
+        return
+    lang = get_locale_for_update(update)
+    parts = (update.effective_message.text or "").strip().split()
+    if len(parts) < 3:
+        update.effective_message.reply_text(t(lang, "admin.cmd.usage_sub"))
+        return
+    name = parts[1].lstrip("@")
+    arg = parts[2].lower()
+
+    now = utcnow()
+    subs = subs_store.read()
+    rec = subs.get(name, {}) if isinstance(subs.get(name, {}), dict) else {}
+
+    if arg in ("inf", "∞", "lifetime"):
+        rec.update(
+            {
+                "type": "none",
+                "created_at": now.isoformat(timespec="minutes"),
+                "expires_at": None,
+                "warned_before_exp": False,
+            }
+        )
+        subs[name] = rec
+        subs_store.write(subs)
+        update.effective_message.reply_text(
+            t(lang, "admin.cmd.sub_lifetime", name=name),
+            parse_mode=PARSE_MODE,
+            reply_markup=kb_back_menu(lang),
+        )
+        return
+
+    if arg in ("off", "none", "0"):
+        subs.pop(name, None)
+        subs_store.write(subs)
+        update.effective_message.reply_text(
+            t(lang, "admin.cmd.sub_removed", name=name),
+            parse_mode=PARSE_MODE,
+            reply_markup=kb_back_menu(lang),
+        )
+        return
+
+    try:
+        days = int(arg)
+        if days <= 0:
+            raise ValueError
+    except ValueError:
+        update.effective_message.reply_text(t(lang, "admin.cmd.sub_days_invalid"))
+        return
+
+    exp = now + timedelta(days=days)
+    rec.update(
+        {
+            "type": "days",
+            "created_at": now.isoformat(timespec="minutes"),
+            "expires_at": exp.isoformat(timespec="minutes"),
+            "warned_before_exp": False,
+        }
+    )
+    subs[name] = rec
+    subs_store.write(subs)
+
+    update.effective_message.reply_text(
+        t(lang, "admin.cmd.sub_extended", name=name, days=days),
+        parse_mode=PARSE_MODE,
+        reply_markup=kb_back_menu(lang),
+    )

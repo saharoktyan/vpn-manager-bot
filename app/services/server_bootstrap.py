@@ -1,0 +1,1476 @@
+from __future__ import annotations
+
+import json
+import logging
+from typing import Tuple
+
+from services.server_registry import RegisteredServer, get_server, update_server_fields
+from services.server_runtime import run_server_command, write_server_file
+
+
+log = logging.getLogger("server_bootstrap")
+
+
+NODE_ENV_EXAMPLE = """# Xray
+XRAY_CONFIG=/opt/vpn-bot/xray/config.json
+XRAY_CONTAINER_NAME=xray
+XRAY_DOCKER_DIR=/opt/vpn-bot/xray
+XRAY_DOCKER_IMAGE=ghcr.io/xtls/xray-core:25.12.8
+XRAY_INBOUND_TCP_TAG=reality-tcp
+XRAY_INBOUND_XHTTP_TAG=reality-xhttp
+
+# AWG / AmneziaWG
+AWG_CONTAINER_NAME=amnezia-awg
+AWG_DOCKER_DIR=/opt/vpn-bot/amnezia-awg
+AWG_DOCKER_IMAGE=vpn-bot-amnezia-awg:latest
+AWG_IFACE=wg0
+AWG_CONFIG=/opt/vpn-bot/amnezia-awg/data/wg0.conf
+AWG_SERVER_ADDRESS=10.8.1.0/24
+AWG_NETWORK=10.8.1.0/24
+AWG_DNS=1.1.1.1
+AWG_MTU=1280
+AWG_ALLOWED_IPS=0.0.0.0/0
+AWG_KEEPALIVE=25
+"""
+
+
+XRAY_ADD_SCRIPT = """#!/usr/bin/env bash
+set -euo pipefail
+source /etc/vpn-bot/node.env
+
+CONFIG="${XRAY_CONFIG:-/usr/local/etc/xray/config.json}"
+CONTAINER="${XRAY_CONTAINER_NAME:-xray}"
+TCP_TAG="${XRAY_INBOUND_TCP_TAG:-reality-tcp}"
+XHTTP_TAG="${XRAY_INBOUND_XHTTP_TAG:-reality-xhttp}"
+
+docker_cmd() {
+  if docker info >/dev/null 2>&1; then
+    docker "$@"
+    return
+  fi
+  if command -v sudo >/dev/null 2>&1 && sudo docker info >/dev/null 2>&1; then
+    sudo docker "$@"
+    return
+  fi
+  echo "Docker is not available for this user." >&2
+  exit 1
+}
+
+read -r TAG
+TAG="${TAG:-}"
+if [[ -z "$TAG" ]]; then
+  echo "Имя не может быть пустым" >&2
+  exit 1
+fi
+if [[ ! "$TAG" =~ ^[a-zA-Z0-9._-]+$ ]]; then
+  echo "Допустимы только латиница/цифры/._-" >&2
+  exit 1
+fi
+
+if [[ ! -f "$CONFIG" ]]; then
+  echo "Xray config not found: $CONFIG" >&2
+  exit 1
+fi
+
+tmp="$(mktemp)"
+UUID="$(python3 - <<PY
+import json, sys, uuid
+
+cfg_path="$CONFIG"
+tmp_path="$tmp"
+name="$TAG"
+tcp_tag="$TCP_TAG"
+xhttp_tag="$XHTTP_TAG"
+
+j=json.load(open(cfg_path, "r", encoding="utf-8"))
+
+for ib in j.get("inbounds", []):
+    for c in (ib.get("settings", {}) or {}).get("clients", []) or []:
+        if c.get("name") == name:
+            print("DUPLICATE", file=sys.stderr)
+            sys.exit(2)
+
+new_uuid=str(uuid.uuid4())
+
+def add_client(ib, flow=None):
+    clients = ib.setdefault("settings", {}).setdefault("clients", [])
+    obj={"id": new_uuid, "name": name}
+    if flow:
+        obj["flow"]=flow
+    clients.append(obj)
+
+found_tcp=False
+found_xhttp=False
+for ib in j.get("inbounds", []):
+    tag=ib.get("tag")
+    if tag==tcp_tag:
+        add_client(ib, flow="xtls-rprx-vision")
+        found_tcp=True
+    elif tag==xhttp_tag:
+        add_client(ib, flow=None)
+        found_xhttp=True
+
+if not found_tcp or not found_xhttp:
+    print(f"MISSING_INBOUNDS tcp={found_tcp} xhttp={found_xhttp}", file=sys.stderr)
+    sys.exit(3)
+
+with open(tmp_path, "w", encoding="utf-8") as f:
+    json.dump(j, f, ensure_ascii=False, indent=2)
+
+print(new_uuid)
+PY
+)" || {
+  rc=$?
+  if [[ $rc -eq 2 ]]; then
+    echo "❌ Пользователь '$TAG' уже существует!" >&2
+    exit 1
+  fi
+  echo "❌ Ошибка обновления Xray config (rc=$rc)." >&2
+  exit 1
+}
+
+python3 -m json.tool "$tmp" >/dev/null
+cp -a "$CONFIG" "${CONFIG}.bak.$(date +%Y%m%d-%H%M%S)"
+mv "$tmp" "$CONFIG"
+docker_cmd restart "$CONTAINER" >/dev/null 2>&1 || true
+echo "$UUID"
+"""
+
+
+XRAY_ADD_EXISTING_SCRIPT = """#!/usr/bin/env bash
+set -euo pipefail
+source /etc/vpn-bot/node.env
+
+CONFIG="${XRAY_CONFIG:-/usr/local/etc/xray/config.json}"
+CONTAINER="${XRAY_CONTAINER_NAME:-xray}"
+TCP_TAG="${XRAY_INBOUND_TCP_TAG:-reality-tcp}"
+XHTTP_TAG="${XRAY_INBOUND_XHTTP_TAG:-reality-xhttp}"
+
+docker_cmd() {
+  if docker info >/dev/null 2>&1; then
+    docker "$@"
+    return
+  fi
+  if command -v sudo >/dev/null 2>&1 && sudo docker info >/dev/null 2>&1; then
+    sudo docker "$@"
+    return
+  fi
+  echo "Docker is not available for this user." >&2
+  exit 1
+}
+
+if [[ $# -ne 2 ]]; then
+  echo "Usage: $0 <name> <uuid>" >&2
+  exit 1
+fi
+
+TAG="$1"
+UUID="$2"
+tmp="$(mktemp)"
+
+python3 - <<PY
+import json
+
+cfg_path="$CONFIG"
+tmp_path="$tmp"
+name="$TAG"
+uuid="$UUID"
+tcp_tag="$TCP_TAG"
+xhttp_tag="$XHTTP_TAG"
+
+j=json.load(open(cfg_path, "r", encoding="utf-8"))
+
+def ensure_client(ib, flow=None):
+    clients = ib.setdefault("settings", {}).setdefault("clients", [])
+    for c in clients:
+        if c.get("name")==name:
+            c["id"]=uuid
+            if flow:
+                c["flow"]=flow
+            else:
+                c.pop("flow", None)
+            return
+    obj={"id": uuid, "name": name}
+    if flow:
+        obj["flow"]=flow
+    clients.append(obj)
+
+found_tcp=False
+found_xhttp=False
+for ib in j.get("inbounds", []):
+    tag=ib.get("tag")
+    if tag==tcp_tag:
+        ensure_client(ib, flow="xtls-rprx-vision")
+        found_tcp=True
+    elif tag==xhttp_tag:
+        ensure_client(ib, flow=None)
+        found_xhttp=True
+
+if not found_tcp or not found_xhttp:
+    raise SystemExit(f"Не найдены нужные inbound tags. tcp={found_tcp}, xhttp={found_xhttp}")
+
+json.dump(j, open(tmp_path,"w", encoding="utf-8"), ensure_ascii=False, indent=2)
+PY
+
+python3 -m json.tool "$tmp" >/dev/null
+cp -a "$CONFIG" "${CONFIG}.bak.$(date +%Y%m%d-%H%M%S)"
+mv "$tmp" "$CONFIG"
+docker_cmd restart "$CONTAINER" >/dev/null 2>&1 || true
+echo "OK"
+"""
+
+
+XRAY_LIST_SCRIPT = """#!/usr/bin/env bash
+set -euo pipefail
+source /etc/vpn-bot/node.env
+CONFIG="${XRAY_CONFIG:-/usr/local/etc/xray/config.json}"
+
+python3 - <<PY
+import json
+j=json.load(open("$CONFIG", encoding="utf-8"))
+m={}
+for ib in j.get("inbounds",[]):
+    for c in (ib.get("settings",{}) or {}).get("clients",[]) or []:
+        n=c.get("name")
+        u=c.get("id")
+        if n and u and n not in m:
+            m[n]=u
+print("NAME UUID")
+for n in sorted(m.keys(), key=str.lower):
+    print(n, m[n])
+PY
+"""
+
+
+XRAY_DEL_SCRIPT = """#!/usr/bin/env bash
+set -euo pipefail
+source /etc/vpn-bot/node.env
+
+CONFIG="${XRAY_CONFIG:-/usr/local/etc/xray/config.json}"
+CONTAINER="${XRAY_CONTAINER_NAME:-xray}"
+NAME="${1:-}"
+if [[ -z "$NAME" ]]; then
+  echo "Usage: $0 <name>" >&2
+  exit 1
+fi
+tmp="$(mktemp)"
+
+docker_cmd() {
+  if docker info >/dev/null 2>&1; then
+    docker "$@"
+    return
+  fi
+  if command -v sudo >/dev/null 2>&1 && sudo docker info >/dev/null 2>&1; then
+    sudo docker "$@"
+    return
+  fi
+  echo "Docker is not available for this user." >&2
+  exit 1
+}
+
+python3 - <<PY
+import json
+
+cfg_path="$CONFIG"
+tmp_path="$tmp"
+name="$NAME"
+j=json.load(open(cfg_path, encoding="utf-8"))
+removed = 0
+for ib in j.get("inbounds", []):
+    settings = ib.get("settings", {})
+    clients = settings.get("clients", [])
+    if not clients:
+        continue
+    new_clients = [c for c in clients if c.get("name") != name]
+    removed += len(clients) - len(new_clients)
+    settings["clients"] = new_clients
+
+json.dump(j, open(tmp_path, "w", encoding="utf-8"), ensure_ascii=False, indent=2)
+print(removed)
+PY
+
+python3 -m json.tool "$tmp" >/dev/null
+cp -a "$CONFIG" "${CONFIG}.bak.$(date +%Y%m%d-%H%M%S)"
+mv "$tmp" "$CONFIG"
+docker_cmd restart "$CONTAINER" >/dev/null 2>&1 || true
+echo "OK"
+"""
+
+
+XRAY_INIT_SCRIPT = """#!/usr/bin/env bash
+set -euo pipefail
+
+CONFIG_PATH="${1:-/opt/vpn-bot/xray/config.json}"
+PUBLIC_HOST="${2:-}"
+SNI_HOST="${3:-www.cloudflare.com}"
+TCP_PORT="${4:-443}"
+XHTTP_PORT="${5:-8443}"
+PATH_PREFIX="${6:-/assets}"
+FLOW="${7:-xtls-rprx-vision}"
+IMAGE="${8:-ghcr.io/xtls/xray-core:25.12.8}"
+
+if [[ -z "$PUBLIC_HOST" ]]; then
+  echo "PUBLIC_HOST is required" >&2
+  exit 1
+fi
+
+mkdir -p "$(dirname "$CONFIG_PATH")"
+
+X25519_OUT="$(docker run --rm "$IMAGE" x25519)"
+read -r PRIVATE_KEY REALITY_PASSWORD < <(
+  XRAY_X25519_OUT="$X25519_OUT" python3 - <<'PY'
+import os
+
+text = os.environ.get("XRAY_X25519_OUT", "")
+lines = [line.rstrip() for line in text.splitlines()]
+
+def extract(prefixes):
+    for i, raw in enumerate(lines):
+        line = raw.strip()
+        lower = line.lower()
+        for prefix in prefixes:
+            if lower.startswith(prefix):
+                tail = line[len(prefix):].lstrip(":").strip()
+                if tail:
+                    return tail
+                for nxt in lines[i + 1:]:
+                    candidate = nxt.strip()
+                    if candidate:
+                        return candidate
+    return ""
+
+private_key = extract(("private key", "privatekey"))
+reality_password = extract(("password",))
+if not reality_password:
+    reality_password = extract(("public key", "publickey"))
+print(private_key, reality_password)
+PY
+)
+if [[ -z "$PRIVATE_KEY" || -z "$REALITY_PASSWORD" ]]; then
+  echo "$X25519_OUT" >&2
+  echo "Could not parse xray x25519 output" >&2
+  exit 1
+fi
+SHORT_ID="$(python3 - <<'PY'
+import secrets
+print(secrets.token_hex(8))
+PY
+)"
+
+python3 - <<PY
+import json
+
+config = {
+    "log": {"loglevel": "warning"},
+    "inbounds": [
+        {
+            "tag": "reality-tcp",
+            "listen": "0.0.0.0",
+            "port": int(${TCP_PORT}),
+            "protocol": "vless",
+            "settings": {"clients": [], "decryption": "none"},
+            "streamSettings": {
+                "network": "tcp",
+                "security": "reality",
+                "realitySettings": {
+                    "show": False,
+                    "dest": f"${SNI_HOST}:443",
+                    "xver": 0,
+                    "serverNames": ["${SNI_HOST}"],
+                    "privateKey": "${PRIVATE_KEY}",
+                    "shortIds": ["${SHORT_ID}"],
+                },
+            },
+        },
+        {
+            "tag": "reality-xhttp",
+            "listen": "0.0.0.0",
+            "port": int(${XHTTP_PORT}),
+            "protocol": "vless",
+            "settings": {"clients": [], "decryption": "none"},
+            "streamSettings": {
+                "network": "xhttp",
+                "security": "reality",
+                "realitySettings": {
+                    "show": False,
+                    "dest": f"${SNI_HOST}:443",
+                    "xver": 0,
+                    "serverNames": ["${SNI_HOST}"],
+                    "privateKey": "${PRIVATE_KEY}",
+                    "shortIds": ["${SHORT_ID}"],
+                },
+                "xhttpSettings": {"path": f"${PATH_PREFIX}/${SHORT_ID}"},
+            },
+        },
+    ],
+    "outbounds": [{"protocol": "freedom", "tag": "direct"}],
+}
+
+with open("${CONFIG_PATH}", "w", encoding="utf-8") as fh:
+    json.dump(config, fh, ensure_ascii=False, indent=2)
+PY
+
+python3 - <<PY
+import json
+print(json.dumps({
+  "xray_host": "${PUBLIC_HOST}",
+  "xray_sni": "${SNI_HOST}",
+  "xray_pbk": "${REALITY_PASSWORD}",
+  "xray_sid": "${SHORT_ID}",
+  "xray_short_id": "${SHORT_ID}",
+  "xray_tcp_port": int(${TCP_PORT}),
+  "xray_xhttp_port": int(${XHTTP_PORT}),
+  "xray_xhttp_path_prefix": "${PATH_PREFIX}",
+  "xray_flow": "${FLOW}",
+  "xray_fp": "chrome"
+}))
+PY
+"""
+
+
+XRAY_SYNC_SCRIPT = """#!/usr/bin/env bash
+set -euo pipefail
+
+CONFIG_PATH="${1:-/opt/vpn-bot/xray/config.json}"
+PUBLIC_HOST="${2:-}"
+FLOW="${3:-xtls-rprx-vision}"
+IMAGE="${4:-ghcr.io/xtls/xray-core:25.12.8}"
+
+if [[ -z "$PUBLIC_HOST" ]]; then
+  echo "PUBLIC_HOST is required" >&2
+  exit 1
+fi
+if [[ ! -f "$CONFIG_PATH" ]]; then
+  echo "Xray config not found: $CONFIG_PATH" >&2
+  exit 1
+fi
+
+CONFIG_PATH_ENV="$CONFIG_PATH" PUBLIC_HOST_ENV="$PUBLIC_HOST" FLOW_ENV="$FLOW" XRAY_IMAGE_ENV="$IMAGE" python3 - <<'PY'
+import json
+import os
+import subprocess
+import sys
+
+cfg_path = os.environ["CONFIG_PATH_ENV"]
+public_host = os.environ["PUBLIC_HOST_ENV"]
+flow = os.environ["FLOW_ENV"]
+image = os.environ["XRAY_IMAGE_ENV"]
+
+cfg = json.load(open(cfg_path, "r", encoding="utf-8"))
+tcp = None
+xhttp = None
+for inbound in cfg.get("inbounds", []):
+    tag = inbound.get("tag")
+    if tag == "reality-tcp":
+        tcp = inbound
+    elif tag == "reality-xhttp":
+        xhttp = inbound
+
+if not tcp or not xhttp:
+    raise SystemExit("Could not find reality-tcp and reality-xhttp inbounds")
+
+reality = (tcp.get("streamSettings", {}) or {}).get("realitySettings", {}) or {}
+private_key = reality.get("privateKey") or ""
+server_names = reality.get("serverNames") or []
+short_ids = reality.get("shortIds") or []
+if not private_key:
+    raise SystemExit("privateKey is missing in Xray config")
+
+res = subprocess.run(
+    ["docker", "run", "--rm", image, "x25519", "-i", private_key],
+    capture_output=True,
+    text=True,
+)
+if res.returncode != 0:
+    raise SystemExit((res.stderr or res.stdout or "xray x25519 -i failed").strip())
+
+reality_password = ""
+for line in (res.stdout or "").splitlines():
+    line = line.strip()
+    lower = line.lower()
+    if lower.startswith("password:"):
+        reality_password = line.split(":", 1)[1].strip()
+        break
+    if lower.startswith("password "):
+        reality_password = line.split(None, 1)[1].strip()
+        break
+    if lower.startswith("public key:"):
+        reality_password = line.split(":", 1)[1].strip()
+        break
+    if lower.startswith("publickey "):
+        reality_password = line.split(None, 1)[1].strip()
+        break
+    if lower in {"password:", "publickey:", "public key:"}:
+        continue
+    if not reality_password and line and not lower.startswith(("private", "hash32")):
+        reality_password = line
+        break
+if not reality_password:
+    raise SystemExit("Could not derive Reality password from private key")
+
+path_prefix = (
+    ((xhttp.get("streamSettings", {}) or {}).get("xhttpSettings", {}) or {}).get("path")
+    or "/assets"
+)
+
+print(json.dumps({
+    "xray_host": public_host,
+    "xray_sni": server_names[0] if server_names else "",
+    "xray_pbk": reality_password,
+    "xray_sid": short_ids[0] if short_ids else "",
+    "xray_short_id": short_ids[0] if short_ids else "",
+    "xray_tcp_port": int(tcp.get("port") or 443),
+    "xray_xhttp_port": int(xhttp.get("port") or 8443),
+    "xray_xhttp_path_prefix": path_prefix.rsplit("/", 1)[0] if "/" in path_prefix else path_prefix,
+    "xray_flow": flow,
+    "xray_fp": "chrome",
+}))
+PY
+"""
+
+
+XRAY_DEPLOY_SCRIPT = """#!/usr/bin/env bash
+set -euo pipefail
+source /etc/vpn-bot/node.env
+
+docker_cmd() {
+  if docker info >/dev/null 2>&1; then
+    docker "$@"
+    return
+  fi
+  if command -v sudo >/dev/null 2>&1; then
+    sudo systemctl enable --now docker >/dev/null 2>&1 || sudo service docker start >/dev/null 2>&1 || true
+    if sudo docker info >/dev/null 2>&1; then
+      sudo docker "$@"
+      return
+    fi
+  fi
+  systemctl enable --now docker >/dev/null 2>&1 || service docker start >/dev/null 2>&1 || true
+  if docker info >/dev/null 2>&1; then
+    docker "$@"
+    return
+  fi
+  echo "Docker daemon is unavailable for this session." >&2
+  id >&2 || true
+  groups >&2 || true
+  ls -l /var/run/docker.sock >&2 || true
+  exit 1
+}
+
+DOCKER_DIR="${XRAY_DOCKER_DIR:-/opt/vpn-bot/xray}"
+IMAGE="${XRAY_DOCKER_IMAGE:-ghcr.io/xtls/xray-core:25.12.8}"
+CONTAINER="${XRAY_CONTAINER_NAME:-xray}"
+CONFIG="${XRAY_CONFIG:-/opt/vpn-bot/xray/config.json}"
+
+mkdir -p "$DOCKER_DIR"
+
+if [[ ! -f "$CONFIG" ]]; then
+  echo "Xray config not found: $CONFIG" >&2
+  exit 1
+fi
+
+if docker_cmd ps -a --format '{{.Names}}' | grep -q "^${CONTAINER}$"; then
+  docker_cmd rm -f "$CONTAINER" >/dev/null
+fi
+
+docker_cmd pull "$IMAGE" >/dev/null
+docker_cmd run -d \
+  --name "$CONTAINER" \
+  --restart unless-stopped \
+  --network host \
+  -v "$CONFIG:/etc/xray/config.json:ro" \
+  "$IMAGE" run -c /etc/xray/config.json >/dev/null
+
+echo "Xray container deployed: $CONTAINER"
+"""
+
+
+AWG_TEMPLATE_JSON = """{
+  "containers": [
+    {
+      "awg": {
+        "H1": "",
+        "H2": "",
+        "H3": "",
+        "H4": "",
+        "I1": "",
+        "I2": "",
+        "I3": "",
+        "I4": "",
+        "I5": "",
+        "Jc": "",
+        "Jmax": "",
+        "Jmin": "",
+        "S1": "",
+        "S2": "",
+        "S3": "",
+        "S4": "",
+        "last_config": "",
+        "port": "",
+        "protocol_version": "2",
+        "subnet_address": "10.8.1.0",
+        "transport_proto": "udp"
+      },
+      "container": "amnezia-awg"
+    }
+  ],
+  "defaultContainer": "amnezia-awg",
+  "description": "awg",
+  "dns1": "1.1.1.1",
+  "dns2": "1.0.0.1",
+  "hostName": "",
+  "nameOverriddenByUser": true
+}
+"""
+
+
+AWG_CONF2VPN_PY = """#!/usr/bin/env python3
+import json
+import re
+import subprocess
+import sys
+from pathlib import Path
+
+
+def parse_conf(text: str):
+    cur = None
+    data = {"Interface": {}, "Peer": {}}
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        m = re.match(r"^\\[(Interface|Peer)\\]$", line, re.I)
+        if m:
+            cur = m.group(1).capitalize()
+            continue
+        if cur and "=" in line:
+            k, v = map(str.strip, line.split("=", 1))
+            data[cur][k] = v
+    return data
+
+
+def _split_csv(value: str):
+    return [part.strip() for part in (value or "").split(",") if part.strip()]
+
+
+def main(conf_path, template_path, out_json_path, decoder_py, container_name="amnezia-awg", description="awg"):
+    conf_text = Path(conf_path).read_text(encoding="utf-8", errors="ignore").strip() + "\\n"
+    tpl = json.loads(Path(template_path).read_text(encoding="utf-8"))
+
+    cfg = parse_conf(conf_text)
+    iface = cfg["Interface"]
+    peer = cfg["Peer"]
+
+    client_ip = iface.get("Address", "").split("/", 1)[0]
+    endpoint = peer.get("Endpoint", "")
+    endpoint_host, endpoint_port = endpoint.rsplit(":", 1)
+    allowed = _split_csv(peer.get("AllowedIPs", "")) or ["0.0.0.0/0", "::/0"]
+    dns_list = _split_csv(iface.get("DNS", ""))
+    dns1 = dns_list[0] if len(dns_list) >= 1 else "1.1.1.1"
+    dns2 = dns_list[1] if len(dns_list) >= 2 else "1.0.0.1"
+    subnet_address = iface.get("Address", "10.8.1.0/24").split("/", 1)[0].rsplit(".", 1)[0] + ".0"
+
+    awg_obj = {
+        "H1": iface.get("H1", ""),
+        "H2": iface.get("H2", ""),
+        "H3": iface.get("H3", ""),
+        "H4": iface.get("H4", ""),
+        "I1": iface.get("I1", ""),
+        "I2": iface.get("I2", ""),
+        "I3": iface.get("I3", ""),
+        "I4": iface.get("I4", ""),
+        "I5": iface.get("I5", ""),
+        "Jc": iface.get("Jc", ""),
+        "Jmax": iface.get("Jmax", ""),
+        "Jmin": iface.get("Jmin", ""),
+        "S1": iface.get("S1", ""),
+        "S2": iface.get("S2", ""),
+        "S3": iface.get("S3", ""),
+        "S4": iface.get("S4", ""),
+        "allowed_ips": allowed,
+        "clientId": iface.get("PublicKey", ""),
+        "client_ip": client_ip,
+        "client_priv_key": iface.get("PrivateKey", ""),
+        "client_pub_key": iface.get("PublicKey", ""),
+        "config": conf_text,
+        "hostName": endpoint_host,
+        "mtu": iface.get("MTU", "1280"),
+        "persistent_keep_alive": peer.get("PersistentKeepalive", "25"),
+        "port": int(endpoint_port),
+        "psk_key": peer.get("PresharedKey", ""),
+        "server_pub_key": peer.get("PublicKey", ""),
+    }
+
+    out = tpl
+    out["hostName"] = endpoint_host
+    out["description"] = description
+    out["dns1"] = dns1
+    out["dns2"] = dns2
+    out["defaultContainer"] = container_name
+    out["containers"][0]["container"] = container_name
+    out["containers"][0]["awg"]["port"] = str(awg_obj["port"])
+    out["containers"][0]["awg"]["transport_proto"] = "udp"
+    out["containers"][0]["awg"]["protocol_version"] = "2"
+    out["containers"][0]["awg"]["subnet_address"] = subnet_address
+
+    for key in ["H1", "H2", "H3", "H4", "I1", "I2", "I3", "I4", "I5", "Jc", "Jmax", "Jmin", "S1", "S2", "S3", "S4"]:
+        out["containers"][0]["awg"][key] = str(awg_obj[key])
+
+    out["containers"][0]["awg"]["last_config"] = json.dumps(
+        awg_obj,
+        ensure_ascii=False,
+        indent=4,
+    )
+
+    Path(out_json_path).write_text(json.dumps(out, ensure_ascii=False, indent=4), encoding="utf-8")
+
+    res = subprocess.run(
+        ["python3", decoder_py, "-i", out_json_path],
+        capture_output=True,
+        text=True,
+    )
+    if res.returncode != 0:
+        print("=== amnezia-config-decoder stderr ===")
+        print(res.stderr.strip())
+        print("=== amnezia-config-decoder stdout ===")
+        print(res.stdout.strip())
+        raise SystemExit(res.returncode)
+
+    print(res.stdout.strip())
+
+
+if __name__ == "__main__":
+    if len(sys.argv) < 5:
+        print("Usage: conf2vpn.py <conf> <template.json> <out.json> <amnezia-config-decoder.py> [container_name] [description]")
+        sys.exit(1)
+    container_name = sys.argv[5] if len(sys.argv) >= 6 else "amnezia-awg"
+    description = sys.argv[6] if len(sys.argv) >= 7 else "awg"
+    main(sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4], container_name, description)
+"""
+
+
+AMNEZIA_CONFIG_DECODER_PY = """import collections
+import argparse
+import base64
+import json
+import zlib
+
+def encode_config(config):
+    json_str = json.dumps(config, indent=4).encode()
+    compressed_data = zlib.compress(json_str)
+    original_data_len = len(json_str)
+    header = original_data_len.to_bytes(4, byteorder='big')
+    encoded_data = base64.urlsafe_b64encode(header + compressed_data).decode().rstrip("=")
+    return f"vpn://{encoded_data}"
+
+def decode_config(encoded_string):
+    encoded_data = encoded_string.replace("vpn://", "")
+    padding = 4 - (len(encoded_data) % 4)
+    encoded_data += "=" * padding
+    compressed_data = base64.urlsafe_b64decode(encoded_data)
+    try:
+        original_data_len = int.from_bytes(compressed_data[:4], byteorder='big')
+        decompressed_data = zlib.decompress(compressed_data[4:])
+        if len(decompressed_data) != original_data_len:
+            raise ValueError("Invalid length of decompressed data")
+        return json.loads(decompressed_data, object_pairs_hook=collections.OrderedDict)
+    except zlib.error:
+        return json.loads(compressed_data.decode(), object_pairs_hook=collections.OrderedDict)
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument('encoded_string', metavar='vpn://...', type=str, nargs='?')
+    parser.add_argument('-i', '--input', metavar='input.json', type=str)
+    parser.add_argument('-o', '--output', metavar='output.json', type=str)
+    args = parser.parse_args()
+    if args.input and args.encoded_string:
+        parser.print_help()
+        print("\\nError: Cannot specify both Base64 string and JSON file simultaneously.")
+    elif args.input:
+        with open(args.input, 'r') as f:
+            config = json.load(f)
+            encoded_string = encode_config(config)
+            print(encoded_string)
+    elif args.encoded_string:
+        config = decode_config(args.encoded_string)
+        if args.output:
+            with open(args.output, 'w') as f:
+                json.dump(config, f, indent=4)
+            print(f"Configuration saved to {args.output}")
+        else:
+            print(json.dumps(config, indent=4))
+    else:
+        parser.print_help()
+"""
+
+
+AWG_ADD_SCRIPT = """#!/usr/bin/env bash
+set -euo pipefail
+source /etc/vpn-bot/node.env
+
+docker_cmd() {
+  if docker info >/dev/null 2>&1; then
+    docker "$@"
+    return
+  fi
+  if command -v sudo >/dev/null 2>&1 && sudo docker info >/dev/null 2>&1; then
+    sudo docker "$@"
+    return
+  fi
+  echo "Docker is not available for this user." >&2
+  exit 1
+}
+
+CONTAINER="${AWG_CONTAINER_NAME:-amnezia-awg}"
+IFACE="${AWG_IFACE:-wg0}"
+CFG="${AWG_CONFIG:-/opt/vpn-bot/amnezia-awg/data/wg0.conf}"
+SERVER_IP="${AWG_SERVER_IP:-}"
+SERVER_PORT="${AWG_SERVER_PORT:-51820}"
+CLIENT_DNS="${AWG_DNS:-1.1.1.1}"
+CLIENT_MTU="${AWG_MTU:-1280}"
+ALLOWED_IPS="${AWG_ALLOWED_IPS:-0.0.0.0/0}"
+KEEPALIVE="${AWG_KEEPALIVE:-25}"
+CONF2VPN="${AWG_CONF2VPN:-/opt/vpn-bot/conf2vpn.py}"
+AWG_TEMPLATE="${AWG_TEMPLATE:-/opt/vpn-bot/awg-template.json}"
+AMNEZIA_DECODER="${AWG_DECODER:-/opt/vpn-bot/amnezia-config-decoder.py}"
+NAME="${1:-}"
+
+if [[ -z "$NAME" ]]; then
+  read -rp "Введите имя пользователя: " NAME
+fi
+if [[ -z "$NAME" ]]; then
+  echo "Имя не может быть пустым" >&2
+  exit 1
+fi
+if [[ ! -f "$CFG" ]]; then
+  echo "AWG config not found: $CFG" >&2
+  echo "Prepare $CFG first or sync the existing config into the mounted data dir." >&2
+  exit 1
+fi
+if [[ -z "$SERVER_IP" ]]; then
+  echo "AWG_SERVER_IP is not configured in /etc/vpn-bot/node.env" >&2
+  exit 1
+fi
+if ! docker_cmd ps --format '{{.Names}}' | grep -q "^${CONTAINER}$"; then
+  echo "Container ${CONTAINER} not running" >&2
+  exit 1
+fi
+
+read -r JC JMIN JMAX S1 S2 S3 S4 H1 H2 H3 H4 I1 I2 I3 I4 I5 < <(
+  awk -F ' = ' '
+    /^Jc = / {jc=$2}
+    /^Jmin = / {jmin=$2}
+    /^Jmax = / {jmax=$2}
+    /^S1 = / {s1=$2}
+    /^S2 = / {s2=$2}
+    /^S3 = / {s3=$2}
+    /^S4 = / {s4=$2}
+    /^H1 = / {h1=$2}
+    /^H2 = / {h2=$2}
+    /^H3 = / {h3=$2}
+    /^H4 = / {h4=$2}
+    /^I1 = / {i1=$2}
+    /^I2 = / {i2=$2}
+    /^I3 = / {i3=$2}
+    /^I4 = / {i4=$2}
+    /^I5 = / {i5=$2}
+    END {print jc, jmin, jmax, s1, s2, s3, s4, h1, h2, h3, h4, i1, i2, i3, i4, i5}
+  ' "$CFG"
+)
+
+USED_IPS="$(
+  docker_cmd exec -i "$CONTAINER" sh -lc \
+  "wg show $IFACE allowed-ips | awk '{print \\$NF}' | cut -d/ -f1" | tr -d '\\r'
+)"
+
+FREE_IP=""
+for i in $(seq 1 254); do
+  ip="10.8.1.$i"
+  if ! grep -qx "$ip" <<< "$USED_IPS"; then
+    FREE_IP="$ip"
+    break
+  fi
+done
+if [[ -z "$FREE_IP" ]]; then
+  echo "Нет свободных IP" >&2
+  exit 1
+fi
+
+read -r CLIENT_PRIV CLIENT_PUB CLIENT_PSK < <(
+  docker_cmd exec -i "$CONTAINER" sh -lc '
+    umask 077
+    priv=$(wg genkey)
+    pub=$(printf "%s" "$priv" | wg pubkey)
+    psk=$(wg genpsk)
+    echo "$priv $pub $psk"
+  ' | tr -d '\\r'
+)
+
+SERVER_PUB="$(docker_cmd exec -i "$CONTAINER" sh -lc "wg show $IFACE public-key" | tr -d '\\r')"
+
+docker_cmd exec -i "$CONTAINER" sh -lc "
+  tmp=\\$(mktemp)
+  echo '$CLIENT_PSK' > \\$tmp
+  wg set $IFACE peer '$CLIENT_PUB' preshared-key \\$tmp allowed-ips '$FREE_IP/32'
+  rm -f \\$tmp
+"
+
+printf '\n# %s\n[Peer]\nPublicKey = %s\nPresharedKey = %s\nAllowedIPs = %s/32\n' \
+  "$NAME" "$CLIENT_PUB" "$CLIENT_PSK" "$FREE_IP" >> "$CFG"
+
+TMP_CONF="$(mktemp /tmp/awg-client-XXXX.conf)"
+TMP_JSON="$(mktemp /tmp/awg-amnezia-XXXX.json)"
+
+cat > "$TMP_CONF" <<EOF
+[Interface]
+PrivateKey = $CLIENT_PRIV
+PublicKey = $CLIENT_PUB
+Address = $FREE_IP/32
+DNS = $CLIENT_DNS
+MTU = $CLIENT_MTU
+
+Jc = $JC
+Jmin = $JMIN
+Jmax = $JMAX
+S1 = $S1
+S2 = $S2
+S3 = $S3
+S4 = $S4
+H1 = $H1
+H2 = $H2
+H3 = $H3
+H4 = $H4
+I1 = $I1
+I2 = $I2
+I3 = $I3
+I4 = $I4
+I5 = $I5
+
+[Peer]
+PublicKey = $SERVER_PUB
+PresharedKey = $CLIENT_PSK
+Endpoint = $SERVER_IP:$SERVER_PORT
+AllowedIPs = $ALLOWED_IPS
+PersistentKeepalive = $KEEPALIVE
+EOF
+
+cat "$TMP_CONF"
+
+if [[ -f "$CONF2VPN" && -f "$AWG_TEMPLATE" && -f "$AMNEZIA_DECODER" ]]; then
+  echo
+  echo "=========== AMNEZIA TEXT KEY (vpn://) ==========="
+  python3 "$CONF2VPN" \
+    "$TMP_CONF" \
+    "$AWG_TEMPLATE" \
+    "$TMP_JSON" \
+    "$AMNEZIA_DECODER" \
+    "$CONTAINER" \
+    "$NAME"
+  echo "================================================="
+fi
+
+rm -f "$TMP_CONF" "$TMP_JSON"
+"""
+
+
+AWG_DEL_SCRIPT = """#!/usr/bin/env bash
+set -euo pipefail
+source /etc/vpn-bot/node.env
+
+docker_cmd() {
+  if docker info >/dev/null 2>&1; then
+    docker "$@"
+    return
+  fi
+  if command -v sudo >/dev/null 2>&1 && sudo docker info >/dev/null 2>&1; then
+    sudo docker "$@"
+    return
+  fi
+  echo "Docker is not available for this user." >&2
+  exit 1
+}
+
+CONTAINER="${AWG_CONTAINER_NAME:-amnezia-awg}"
+CFG="${AWG_CONFIG:-/opt/vpn-bot/amnezia-awg/data/wg0.conf}"
+NAME="${1:-}"
+if [[ -z "$NAME" ]]; then
+  echo "Usage: $0 <name>" >&2
+  exit 1
+fi
+if ! docker_cmd ps --format '{{.Names}}' | grep -q "^${CONTAINER}$"; then
+  echo "Container ${CONTAINER} not found" >&2
+  exit 1
+fi
+tmp="$(mktemp)"
+awk -v name="$NAME" '
+  {
+    if ($0 == "# " name) {skip=1; next}
+    if (skip && NF==0) {skip=0; next}
+    if (skip) next
+    print
+  }
+' "$CFG" > "$tmp"
+cp -a "$CFG" "${CFG}.bak.$(date +%Y%m%d-%H%M%S)"
+mv "$tmp" "$CFG"
+docker_cmd restart "$CONTAINER" >/dev/null
+echo "OK"
+"""
+
+
+AWG_INIT_SCRIPT = """#!/usr/bin/env bash
+set -euo pipefail
+source /etc/vpn-bot/node.env
+
+CFG="${AWG_CONFIG:-/opt/vpn-bot/amnezia-awg/data/wg0.conf}"
+IFACE="${AWG_IFACE:-wg0}"
+SERVER_ADDR="${AWG_SERVER_ADDRESS:-10.8.1.0/24}"
+PORT="${AWG_SERVER_PORT:-51820}"
+
+mkdir -p "$(dirname "$CFG")"
+if [[ -s "$CFG" ]]; then
+  echo "AWG config already exists: $CFG"
+  exit 0
+fi
+
+PUB_IFACE="$(ip route get 1.1.1.1 | awk '/dev/ {for (i=1;i<=NF;i++) if ($i=="dev") {print $(i+1); exit}}')"
+if [[ -z "$PUB_IFACE" ]]; then
+  echo "Could not detect public interface" >&2
+  exit 1
+fi
+
+SERVER_PRIV="$(wg genkey)"
+SERVER_PUB="$(printf '%s' "$SERVER_PRIV" | wg pubkey)"
+
+read -r JC JMIN JMAX S1 S2 S3 S4 H1 H2 H3 H4 < <(
+python3 - <<'PY'
+import random
+
+# AmneziaWG 2.0 docs:
+# - Jc: 0..10
+# - Jmin/Jmax: 64..1024 and Jmin < Jmax
+# - S1/S2/S3: 0..64, S4: 0..32
+# - S1 + 56 != S2
+# - H1-H4 ranges must not overlap
+
+jc = random.randint(3, 7)
+jmin = random.randint(64, 160)
+jmax = random.randint(max(jmin + 32, 192), min(jmin + 320, 1024))
+s1 = random.randint(0, 64)
+s2 = random.randint(0, 64)
+while s1 + 56 == s2:
+    s2 = random.randint(0, 64)
+s3 = random.randint(0, 64)
+s4 = random.randint(0, 32)
+
+segments = []
+cursor = random.randint(100_000_000, 300_000_000)
+for _ in range(4):
+    length = random.randint(10_000_000, 120_000_000)
+    start = cursor
+    end = start + length
+    if end > 4_294_967_295:
+        raise RuntimeError("Generated H-range exceeds uint32")
+    segments.append(f"{start}-{end}")
+    cursor = end + random.randint(5_000_000, 80_000_000)
+
+print(jc, jmin, jmax, s1, s2, s3, s4, *segments)
+PY
+)
+
+cat > "$CFG" <<EOF
+[Interface]
+PrivateKey = $SERVER_PRIV
+Address = $SERVER_ADDR
+ListenPort = $PORT
+
+Jc = $JC
+Jmin = $JMIN
+Jmax = $JMAX
+S1 = $S1
+S2 = $S2
+S3 = $S3
+S4 = $S4
+H1 = $H1
+H2 = $H2
+H3 = $H3
+H4 = $H4
+# I1 =
+# I2 =
+# I3 =
+# I4 =
+# I5 =
+EOF
+
+chmod 600 "$CFG"
+echo "AWG config initialized: $CFG"
+echo "Server public key: $SERVER_PUB"
+"""
+
+
+AWG_DOCKERFILE = """FROM amneziavpn/amneziawg-go:latest
+
+LABEL maintainer="AmneziaVPN"
+
+RUN apk add --no-cache bash curl dumb-init
+RUN apk --update upgrade --no-cache
+
+RUN mkdir -p /opt/amnezia
+RUN cat > /opt/amnezia/start.sh <<'EOF'
+#!/bin/bash
+set -euo pipefail
+
+IFACE="${AWG_IFACE:-wg0}"
+CFG="${AWG_CONFIG_FILE:-/opt/amnezia/awg/wg0.conf}"
+NETWORK="${AWG_NETWORK:-10.8.1.0/24}"
+export WG_QUICK_USERSPACE_IMPLEMENTATION="${WG_QUICK_USERSPACE_IMPLEMENTATION:-amneziawg-go}"
+PUB_IFACE="$(ip route get 1.1.1.1 | awk '/dev/ {for (i=1;i<=NF;i++) if ($i==\"dev\") {print $(i+1); exit}}')"
+
+setup_nat() {
+  if [[ -n "$PUB_IFACE" ]]; then
+    iptables -C FORWARD -i "$IFACE" -j ACCEPT >/dev/null 2>&1 || iptables -A FORWARD -i "$IFACE" -j ACCEPT
+    iptables -C FORWARD -o "$IFACE" -j ACCEPT >/dev/null 2>&1 || iptables -A FORWARD -o "$IFACE" -j ACCEPT
+    iptables -t nat -C POSTROUTING -s "$NETWORK" -o "$PUB_IFACE" -j MASQUERADE >/dev/null 2>&1 || \
+      iptables -t nat -A POSTROUTING -s "$NETWORK" -o "$PUB_IFACE" -j MASQUERADE
+  fi
+}
+
+cleanup_nat() {
+  if [[ -n "$PUB_IFACE" ]]; then
+    iptables -D FORWARD -i "$IFACE" -j ACCEPT >/dev/null 2>&1 || true
+    iptables -D FORWARD -o "$IFACE" -j ACCEPT >/dev/null 2>&1 || true
+    iptables -t nat -D POSTROUTING -s "$NETWORK" -o "$PUB_IFACE" -j MASQUERADE >/dev/null 2>&1 || true
+  fi
+}
+
+cleanup() {
+  cleanup_nat
+  if command -v awg-quick >/dev/null 2>&1; then
+    awg-quick down "$CFG" >/dev/null 2>&1 || true
+  elif command -v wg-quick >/dev/null 2>&1; then
+    wg-quick down "$CFG" >/dev/null 2>&1 || true
+  fi
+}
+
+trap cleanup EXIT INT TERM
+
+if [[ ! -f "$CFG" ]]; then
+  echo "Config not found: $CFG"
+  tail -f /dev/null
+  exit 0
+fi
+
+sysctl -w net.ipv4.ip_forward=1 >/dev/null 2>&1 || true
+ip link del "$IFACE" >/dev/null 2>&1 || true
+
+if command -v awg-quick >/dev/null 2>&1; then
+  awg-quick up "$CFG"
+elif command -v wg-quick >/dev/null 2>&1; then
+  wg-quick up "$CFG"
+else
+  echo "Neither awg-quick nor wg-quick found in container" >&2
+  tail -f /dev/null
+  exit 1
+fi
+
+setup_nat
+
+tail -f /dev/null
+EOF
+RUN chmod a+x /opt/amnezia/start.sh
+
+RUN echo -e " \\n\\
+  fs.file-max = 51200 \\n\\
+  \\n\\
+  net.core.rmem_max = 67108864 \\n\\
+  net.core.wmem_max = 67108864 \\n\\
+  net.core.netdev_max_backlog = 250000 \\n\\
+  net.core.somaxconn = 4096 \\n\\
+  \\n\\
+  net.ipv4.tcp_syncookies = 1 \\n\\
+  net.ipv4.tcp_tw_reuse = 1 \\n\\
+  net.ipv4.tcp_tw_recycle = 0 \\n\\
+  net.ipv4.tcp_fin_timeout = 30 \\n\\
+  net.ipv4.tcp_keepalive_time = 1200 \\n\\
+  net.ipv4.ip_local_port_range = 10000 65000 \\n\\
+  net.ipv4.tcp_max_syn_backlog = 8192 \\n\\
+  net.ipv4.tcp_max_tw_buckets = 5000 \\n\\
+  net.ipv4.tcp_fastopen = 3 \\n\\
+  net.ipv4.tcp_mem = 25600 51200 102400 \\n\\
+  net.ipv4.tcp_rmem = 4096 87380 67108864 \\n\\
+  net.ipv4.tcp_wmem = 4096 65536 67108864 \\n\\
+  net.ipv4.tcp_mtu_probing = 1 \\n\\
+  net.ipv4.tcp_congestion_control = hybla \\n\\
+  # net.ipv4.tcp_congestion_control = cubic \\n\\
+  " | sed -e 's/^\\s\\+//g' | tee -a /etc/sysctl.conf && \\
+  mkdir -p /etc/security && \\
+  echo -e " \\n\\
+  * soft nofile 51200 \\n\\
+  * hard nofile 51200 \\n\\
+  " | sed -e 's/^\\s\\+//g' | tee -a /etc/security/limits.conf
+
+ENTRYPOINT [ "dumb-init", "/opt/amnezia/start.sh" ]
+CMD [ "" ]
+"""
+
+
+AWG_DEPLOY_SCRIPT = """#!/usr/bin/env bash
+set -euo pipefail
+source /etc/vpn-bot/node.env
+
+docker_cmd() {
+  if docker info >/dev/null 2>&1; then
+    docker "$@"
+    return
+  fi
+  if command -v sudo >/dev/null 2>&1; then
+    sudo systemctl enable --now docker >/dev/null 2>&1 || sudo service docker start >/dev/null 2>&1 || true
+    if sudo docker info >/dev/null 2>&1; then
+      sudo docker "$@"
+      return
+    fi
+  fi
+  systemctl enable --now docker >/dev/null 2>&1 || service docker start >/dev/null 2>&1 || true
+  if docker info >/dev/null 2>&1; then
+    docker "$@"
+    return
+  fi
+  echo "Docker daemon is unavailable for this session." >&2
+  id >&2 || true
+  groups >&2 || true
+  ls -l /var/run/docker.sock >&2 || true
+  exit 1
+}
+
+DOCKER_DIR="${AWG_DOCKER_DIR:-/opt/vpn-bot/amnezia-awg}"
+IMAGE="${AWG_DOCKER_IMAGE:-vpn-bot-amnezia-awg:latest}"
+CONTAINER="${AWG_CONTAINER_NAME:-amnezia-awg}"
+CFG="${AWG_CONFIG:-/opt/vpn-bot/amnezia-awg/data/wg0.conf}"
+IFACE="${AWG_IFACE:-wg0}"
+
+mkdir -p "$DOCKER_DIR/data"
+docker_cmd build -t "$IMAGE" "$DOCKER_DIR"
+
+if docker_cmd ps -a --format '{{.Names}}' | grep -q "^${CONTAINER}$"; then
+  docker_cmd rm -f "$CONTAINER" >/dev/null
+fi
+
+docker_cmd run -d \
+  --name "$CONTAINER" \
+  --restart unless-stopped \
+  --privileged \
+  --network host \
+  -e AWG_IFACE="$IFACE" \
+  -e AWG_CONFIG_FILE="/opt/amnezia/awg/$(basename "$CFG")" \
+  -e AWG_NETWORK="${AWG_NETWORK:-10.8.1.0/24}" \
+  -v "$DOCKER_DIR/data:/opt/amnezia/awg" \
+  -v /lib/modules:/lib/modules:ro \
+  "$IMAGE" >/dev/null
+
+echo "AWG container deployed: $CONTAINER"
+"""
+
+
+def _packages_script() -> str:
+    return """#!/usr/bin/env bash
+set -euo pipefail
+export DEBIAN_FRONTEND=noninteractive
+if command -v apt-get >/dev/null 2>&1; then
+  apt-get update
+  apt-get install -y ca-certificates curl jq qrencode wireguard-tools python3 iproute2 iptables
+  if ! command -v docker >/dev/null 2>&1; then
+    apt-get install -y docker.io
+    apt-cache show docker-compose-plugin >/dev/null 2>&1 && apt-get install -y docker-compose-plugin || true
+  fi
+fi
+systemctl enable --now docker >/dev/null 2>&1 || service docker start >/dev/null 2>&1 || true
+mkdir -p /etc/vpn-bot /opt/vpn-bot /opt/vpn-bot/xray /opt/vpn-bot/amnezia-awg/data
+touch /etc/vpn-bot/node.env
+"""
+
+
+def _mark(server: RegisteredServer, state: str, notes: str = "") -> None:
+    update_server_fields(server.key, bootstrap_state=state, notes=notes)
+
+
+def render_server_node_env(server: RegisteredServer) -> str:
+    return (
+        f"XRAY_CONFIG={server.xray_config_path}\n"
+        f"XRAY_CONTAINER_NAME={server.xray_service_name}\n"
+        f"XRAY_DOCKER_DIR=/opt/vpn-bot/xray\n"
+        f"XRAY_DOCKER_IMAGE=ghcr.io/xtls/xray-core:25.12.8\n"
+        f"XRAY_INBOUND_TCP_TAG=reality-tcp\n"
+        f"XRAY_INBOUND_XHTTP_TAG=reality-xhttp\n"
+        f"AWG_CONTAINER_NAME=amnezia-awg\n"
+        f"AWG_DOCKER_DIR=/opt/vpn-bot/amnezia-awg\n"
+        f"AWG_DOCKER_IMAGE=vpn-bot-amnezia-awg:latest\n"
+        f"AWG_IFACE={server.awg_iface}\n"
+        f"AWG_CONFIG=/opt/vpn-bot/amnezia-awg/data/{server.awg_iface}.conf\n"
+        f"AWG_SERVER_ADDRESS=10.8.1.0/24\n"
+        f"AWG_NETWORK=10.8.1.0/24\n"
+        f"AWG_DNS=1.1.1.1\n"
+        f"AWG_MTU=1280\n"
+        f"AWG_ALLOWED_IPS=0.0.0.0/0\n"
+        f"AWG_KEEPALIVE=25\n"
+        f"AWG_SERVER_IP={server.awg_public_host or server.public_host}\n"
+        f"AWG_SERVER_PORT={server.awg_port}\n"
+    )
+
+
+def sync_server_node_env(server_key: str) -> Tuple[int, str]:
+    server = get_server(server_key)
+    if not server:
+        return 1, f"Server {server_key} not found"
+    content = render_server_node_env(server)
+    rc, out = write_server_file(server, "/etc/vpn-bot/node.env", content, mode="0644")
+    if rc != 0:
+        return rc, out
+    update_server_fields(server.key, notes="node.env synced from bot")
+    return 0, "node.env written to /etc/vpn-bot/node.env"
+
+
+def probe_server(server_key: str) -> Tuple[int, str]:
+    server = get_server(server_key)
+    if not server:
+        return 1, f"Server {server_key} not found"
+    return run_server_command(server, "hostname && whoami && uname -a", timeout=20)
+
+
+def sync_xray_server_settings(server_key: str) -> Tuple[int, str]:
+    server = get_server(server_key)
+    if not server:
+        return 1, f"Server {server_key} not found"
+    if "xray" not in server.protocol_kinds:
+        return 1, f"Server {server_key} does not have xray enabled"
+
+    rc, out = run_server_command(
+        server,
+        " ".join(
+            [
+                "/opt/vpn-bot/sync-xray.sh",
+                server.xray_config_path,
+                server.public_host,
+                server.xray_flow,
+                "ghcr.io/xtls/xray-core:25.12.8",
+            ]
+        ),
+        timeout=120,
+    )
+    if rc != 0:
+        return rc, out
+    try:
+        generated = json.loads(out.strip().splitlines()[-1])
+    except Exception:
+        return 1, f"Could not parse synced Xray settings:\n{out[-1500:]}"
+    update_server_fields(server.key, **generated)
+    return 0, json.dumps(generated, ensure_ascii=False, indent=2)
+
+
+def bootstrap_server(server_key: str) -> Tuple[int, str]:
+    server = get_server(server_key)
+    if not server:
+        return 1, f"Server {server_key} not found"
+
+    rc, out = run_server_command(server, _packages_script(), timeout=600)
+    if rc != 0:
+        _mark(server, "bootstrap_failed", out[-1500:])
+        return rc, out
+
+    files = {
+        "/etc/vpn-bot/node.env.example": NODE_ENV_EXAMPLE,
+        "/opt/vpn-bot/init-xray.sh": XRAY_INIT_SCRIPT,
+        "/opt/vpn-bot/sync-xray.sh": XRAY_SYNC_SCRIPT,
+        "/opt/vpn-bot/deploy-xray.sh": XRAY_DEPLOY_SCRIPT,
+        "/opt/vpn-bot/add-user.sh": XRAY_ADD_SCRIPT,
+        "/opt/vpn-bot/add-user-existing.sh": XRAY_ADD_EXISTING_SCRIPT,
+        "/opt/vpn-bot/list-users.sh": XRAY_LIST_SCRIPT,
+        "/opt/vpn-bot/del-user.sh": XRAY_DEL_SCRIPT,
+        "/opt/vpn-bot/conf2vpn.py": AWG_CONF2VPN_PY,
+        "/opt/vpn-bot/amnezia-config-decoder.py": AMNEZIA_CONFIG_DECODER_PY,
+        "/opt/vpn-bot/awg-template.json": AWG_TEMPLATE_JSON,
+        "/opt/vpn-bot/add-awg-user.sh": AWG_ADD_SCRIPT,
+        "/opt/vpn-bot/del-awg-user.sh": AWG_DEL_SCRIPT,
+        "/opt/vpn-bot/init-awg.sh": AWG_INIT_SCRIPT,
+        "/opt/vpn-bot/amnezia-awg/Dockerfile": AWG_DOCKERFILE,
+        "/opt/vpn-bot/deploy-awg.sh": AWG_DEPLOY_SCRIPT,
+    }
+    for path, content in files.items():
+        file_rc, file_out = write_server_file(server, path, content, mode="0755" if path.endswith(".sh") else "0644")
+        if file_rc != 0:
+            _mark(server, "bootstrap_failed", file_out[-1500:])
+            return file_rc, file_out
+
+    node_env_rc, node_env_out = write_server_file(server, "/etc/vpn-bot/node.env", render_server_node_env(server), mode="0644")
+    if node_env_rc != 0:
+        _mark(server, "bootstrap_failed", node_env_out[-1500:])
+        return node_env_rc, node_env_out
+
+    rc, out = run_server_command(
+        server,
+        "ln -sf /opt/vpn-bot/add-user.sh /opt/add-user.sh && "
+        "ln -sf /opt/vpn-bot/add-user-existing.sh /opt/add-user-existing.sh && "
+        "ln -sf /opt/vpn-bot/list-users.sh /opt/list-users.sh && "
+        "ln -sf /opt/vpn-bot/del-user.sh /opt/del-user.sh && "
+        "ln -sf /opt/vpn-bot/add-awg-user.sh /opt/add-awg-user.sh && "
+        "ln -sf /opt/vpn-bot/del-awg-user.sh /opt/del-awg-user.sh",
+        timeout=60,
+    )
+    if rc != 0:
+        _mark(server, "bootstrap_failed", out[-1500:])
+        return rc, out
+
+    if "xray" in server.protocol_kinds:
+        sni_host = server.xray_sni or "www.cloudflare.com"
+        rc, out = run_server_command(
+            server,
+            " ".join(
+                [
+                    "/opt/vpn-bot/init-xray.sh",
+                    server.xray_config_path,
+                    server.public_host,
+                    sni_host,
+                    str(server.xray_tcp_port),
+                    str(server.xray_xhttp_port),
+                    server.xray_xhttp_path_prefix,
+                    server.xray_flow,
+                    "ghcr.io/xtls/xray-core:25.12.8",
+                ]
+            ),
+            timeout=180,
+        )
+        if rc != 0:
+            _mark(server, "bootstrap_failed", out[-1500:])
+            return rc, out
+        try:
+            generated = json.loads(out.strip().splitlines()[-1])
+        except Exception:
+            _mark(server, "bootstrap_failed", out[-1500:])
+            return 1, f"Could not parse generated Xray settings:\n{out[-1500:]}"
+        if not generated.get("xray_pbk"):
+            _mark(server, "bootstrap_failed", out[-1500:])
+            return 1, f"Generated Xray settings are incomplete:\n{out[-1500:]}"
+        update_server_fields(server.key, **generated)
+        rc, out = run_server_command(server, "/opt/vpn-bot/deploy-xray.sh", timeout=300)
+        if rc != 0:
+            _mark(server, "bootstrap_failed", out[-1500:])
+            return rc, out
+
+    if "awg" in server.protocol_kinds:
+        rc, out = run_server_command(server, "/opt/vpn-bot/init-awg.sh", timeout=120)
+        if rc != 0:
+            _mark(server, "bootstrap_failed", out[-1500:])
+            return rc, out
+        rc, out = run_server_command(server, "/opt/vpn-bot/deploy-awg.sh", timeout=900)
+        if rc != 0:
+            _mark(server, "bootstrap_failed", out[-1500:])
+            return rc, out
+
+    _mark(
+        server,
+        "bootstrapped",
+        "Base packages, helper scripts, generated Xray settings, and AWG container runtime installed.",
+    )
+    return 0, (
+        "Bootstrap completed.\n"
+        "Installed Xray packages, helper scripts, generated server link settings, and AWG Docker runtime.\n"
+        "Working node.env was written to /etc/vpn-bot/node.env."
+    )

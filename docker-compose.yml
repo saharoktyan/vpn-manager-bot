@@ -1,0 +1,19 @@
+version: "3.9"
+
+services:
+  vpn-bot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: vpn-bot-v2
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      VPN_BOT_BASE_DIR: /opt/vpn-bot
+      TZ: UTC
+    volumes:
+      - ./data:/opt/vpn-bot/data
+      - ./ssh:/root/.ssh
+    working_dir: /opt/vpn-bot/app
+    command: sh -c "python manage_db.py init && python main.py"
