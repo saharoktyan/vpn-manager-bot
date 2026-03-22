@@ -18,11 +18,12 @@ def is_admin(update: Update) -> bool:
 
 def render_main_menu(update: Update, context: CallbackContext) -> None:
     lang = get_locale_for_update(update)
+    from handlers.user_common import _has_access
     safe_edit_message(
         update,
         context,
         f"*{MENU_TITLE}*\n\n{t(lang, 'menu.choose_action')}",
-        reply_markup=kb_main_menu(is_admin(update), lang),
+        reply_markup=kb_main_menu(is_admin(update), _has_access(update), lang),
         parse_mode=PARSE_MODE,
     )
 

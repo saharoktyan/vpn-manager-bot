@@ -148,6 +148,19 @@ CREATE TABLE IF NOT EXISTS profile_server_state (
 """
 
 
+TRAFFIC_SAMPLES_DDL = """
+CREATE TABLE IF NOT EXISTS traffic_samples (
+    profile_name TEXT NOT NULL,
+    server_key TEXT NOT NULL,
+    protocol_kind TEXT NOT NULL,
+    remote_id TEXT NOT NULL,
+    rx_bytes_total INTEGER NOT NULL DEFAULT 0,
+    tx_bytes_total INTEGER NOT NULL DEFAULT 0,
+    sampled_at TEXT NOT NULL
+)
+"""
+
+
 def _table_exists(conn: sqlite3.Connection, name: str) -> bool:
     row = conn.execute(
         "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
@@ -351,6 +364,41 @@ def _migrate_profile_server_state_table(conn: sqlite3.Connection) -> None:
     )
 
 
+def _create_traffic_samples_table(conn: sqlite3.Connection) -> None:
+    conn.execute(TRAFFIC_SAMPLES_DDL)
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_traffic_samples_profile_month
+        ON traffic_samples(profile_name, protocol_kind, sampled_at)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_traffic_samples_server_remote
+        ON traffic_samples(server_key, protocol_kind, remote_id, sampled_at)
+        """
+    )
+
+
+def _migrate_traffic_samples_table(conn: sqlite3.Connection) -> None:
+    columns = _table_columns(conn, "traffic_samples")
+    if not columns:
+        _create_traffic_samples_table(conn)
+        return
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_traffic_samples_profile_month
+        ON traffic_samples(profile_name, protocol_kind, sampled_at)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_traffic_samples_server_remote
+        ON traffic_samples(server_key, protocol_kind, remote_id, sampled_at)
+        """
+    )
+
+
 def ensure_schema(conn: sqlite3.Connection) -> None:
     for ddl in BASE_DDL:
         conn.execute(ddl)
@@ -358,6 +406,7 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
     _migrate_servers_table(conn)
     _migrate_awg_table(conn)
     _migrate_profile_server_state_table(conn)
+    _migrate_traffic_samples_table(conn)
     conn.execute(
-        "INSERT OR REPLACE INTO schema_meta(key, value) VALUES ('schema_version', '3')"
+        "INSERT OR REPLACE INTO schema_meta(key, value) VALUES ('schema_version', '4')"
     )

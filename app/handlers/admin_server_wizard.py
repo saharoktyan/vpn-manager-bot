@@ -14,6 +14,7 @@ from services.xray import get_server_link_status
 from utils.tg import answer_cb, safe_delete_by_id, safe_delete_update_message, safe_edit_by_ids, safe_edit_message
 
 from .admin_common import guard, kb_back_menu
+from utils.keyboards import kb_admin_menu
 
 
 def _md(value: Any) -> str:
@@ -102,7 +103,7 @@ def _server_menu_markup(lang: str) -> InlineKeyboardMarkup:
         [
             [InlineKeyboardButton(t(lang, "admin.wizard.new_server"), callback_data=f"{CB_SRV}start:create")],
             [InlineKeyboardButton(t(lang, "admin.wizard.edit_server"), callback_data=f"{CB_SRV}start:edit")],
-            [InlineKeyboardButton(t(lang, "admin.wizard.close"), callback_data=f"{CB_SRV}cancel")],
+            [InlineKeyboardButton(t(lang, "menu.back"), callback_data=f"{CB_SRV}cancel")],
         ]
     )
 
@@ -226,7 +227,7 @@ def _server_dashboard_markup(servers: Sequence[RegisteredServer], lang: str) -> 
         for server in servers
     ]
     rows.append([InlineKeyboardButton(t(lang, "admin.wizard.new_server"), callback_data=f"{CB_SRV}start:create")])
-    rows.append([InlineKeyboardButton(t(lang, "admin.wizard.close"), callback_data=f"{CB_SRV}cancel")])
+    rows.append([InlineKeyboardButton(t(lang, "menu.back"), callback_data=f"{CB_SRV}cancel")])
     return InlineKeyboardMarkup(rows)
 
 
@@ -536,7 +537,14 @@ def on_server_callback(update: Update, context: CallbackContext, payload: str) -
 
     w = _wizard_get(context)
     if payload == "cancel":
-        _wizard_close(context)
+        _wizard_clear(context)
+        safe_edit_message(
+            update,
+            context,
+            f"{t(lang, 'admin.menu_title')}\n\n{t(lang, 'menu.admin_choose')}",
+            reply_markup=kb_admin_menu(lang),
+            parse_mode=PARSE_MODE,
+        )
         return
     if not w:
         safe_edit_message(update, context, t(lang, "admin.wizard.server_inactive"), reply_markup=kb_back_menu(lang), parse_mode=None)

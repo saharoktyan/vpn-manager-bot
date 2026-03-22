@@ -11,6 +11,7 @@ from routers.callback_router import on_callback
 from handlers.user import start_cmd, version_cmd, whoami_cmd, getkey_cmd
 from handlers import admin as admin_handlers
 from services.subscriptions import auto_freeze_job
+from services.traffic_usage import collect_traffic_job
 
 logging.getLogger("xray").setLevel(logging.INFO)
 logging.getLogger("awg").setLevel(logging.INFO)
@@ -38,6 +39,7 @@ def main() -> None:
 
     # scheduler placeholder
     updater.job_queue.run_repeating(auto_freeze_job, interval=3600, first=60, name="auto_freeze_job")
+    updater.job_queue.run_repeating(collect_traffic_job, interval=3600, first=300, name="collect_traffic_job")
 
     # user commands
     dp.add_handler(CommandHandler("start", start_cmd))

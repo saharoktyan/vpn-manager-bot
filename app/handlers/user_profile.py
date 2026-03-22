@@ -14,6 +14,7 @@ from services.server_registry import list_servers
 from services.awg_profiles import list_awg_server_keys
 from services.ssh_keys import render_public_key_guide
 from services.subscriptions import get_allowed_protocols, get_profile, get_subscription_status, subs_store, users_store, utcnow
+from services.traffic_usage import get_profile_monthly_usage
 from services.xray import get_server_link_status
 from ui.user_views import format_server_access
 from utils.keyboards import kb_admin_menu, kb_admin_settings_menu, kb_back_to_admin, kb_language_menu, kb_main_menu, kb_profile_minimal, kb_profile_stats, kb_settings_menu
@@ -71,6 +72,18 @@ def _format_username(value: str, lang: str) -> str:
     if not username:
         return t(lang, "common.none")
     return f"@{username}"
+
+
+def _format_bytes(num_bytes: int) -> str:
+    value = float(max(0, int(num_bytes)))
+    units = ["B", "KB", "MB", "GB", "TB"]
+    idx = 0
+    while value >= 1024 and idx < len(units) - 1:
+        value /= 1024.0
+        idx += 1
+    if idx == 0:
+        return f"{int(value)} {units[idx]}"
+    return f"{value:.1f} {units[idx]}"
 
 
 def _request_state_get(context: CallbackContext) -> Optional[Dict[str, Any]]:
@@ -637,6 +650,8 @@ def on_menu_callback(update: Update, context: CallbackContext, payload: str) -> 
         last_key_txt = _human_ago(last_key_at) if last_key_at else "—"
         username_text = _format_username(str(user.username or ""), lang)
         created_txt = _human_ago(created_at) if created_at else "—"
+        awg_usage = get_profile_monthly_usage(name, "awg")
+        awg_usage_txt = _format_bytes(int(awg_usage["total_bytes"]))
 
         safe_edit_message(
             update,
@@ -661,6 +676,8 @@ def on_menu_callback(update: Update, context: CallbackContext, payload: str) -> 
                 f"{t(lang, 'profile.access_section')}\n"
                 f"{server_access}\n"
                 + f"{t(lang, 'profile.frozen', value=frozen_flag)}\n\n"
+                f"{t(lang, 'profile.traffic')}\n"
+                f"{t(lang, 'profile.awg_traffic', value=awg_usage_txt)}\n\n"
                 f"{t(lang, 'profile.activity')}\n"
                 f"{t(lang, 'profile.keys_issued', count=key_cnt)}\n"
                 f"{t(lang, 'profile.last_key', value=last_key_txt)}\n\n"

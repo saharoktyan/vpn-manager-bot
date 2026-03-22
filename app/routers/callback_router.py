@@ -48,7 +48,11 @@ def on_callback(update: Update, context: CallbackContext) -> None:
     safe_edit_message(
         update, context,
         f"*{MENU_TITLE}*\n\n{t(get_locale_for_update(update), 'menu.choose_action')}",
-        reply_markup=kb_main_menu(user_handlers._is_admin(update), get_locale_for_update(update)),
+        reply_markup=kb_main_menu(
+            user_handlers._is_admin(update),
+            user_handlers._has_access(update),
+            get_locale_for_update(update),
+        ),
         # если kb_main_menu не импортируется — см. ниже
         parse_mode=PARSE_MODE,
     )
