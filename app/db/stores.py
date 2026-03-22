@@ -152,7 +152,7 @@ class SQLiteTelegramUsersStore:
                 """
                 SELECT telegram_user_id, chat_id, username, first_name, last_name, profile_name, locale,
                        access_granted, access_request_pending, access_request_sent_at,
-                       notify_access_requests,
+                       notify_access_requests, telemetry_enabled,
                        updated_at, last_key_at, key_issued_count
                 FROM telegram_users
                 ORDER BY telegram_user_id
@@ -171,6 +171,7 @@ class SQLiteTelegramUsersStore:
                     "access_request_pending": bool(row["access_request_pending"]) if row["access_request_pending"] is not None else False,
                     "access_request_sent_at": row["access_request_sent_at"],
                     "notify_access_requests": bool(row["notify_access_requests"]) if row["notify_access_requests"] is not None else True,
+                    "telemetry_enabled": bool(row["telemetry_enabled"]) if row["telemetry_enabled"] is not None else False,
                     "updated_at": row["updated_at"],
                     "last_key_at": row["last_key_at"],
                     "key_issued_count": int(row["key_issued_count"] or 0),
@@ -193,9 +194,9 @@ class SQLiteTelegramUsersStore:
                     INSERT INTO telegram_users(
                         telegram_user_id, chat_id, username, first_name, last_name, profile_name,
                         locale, access_granted, access_request_pending, access_request_sent_at,
-                        notify_access_requests,
+                        notify_access_requests, telemetry_enabled,
                         updated_at, last_key_at, key_issued_count
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         telegram_user_id,
@@ -209,6 +210,7 @@ class SQLiteTelegramUsersStore:
                         1 if rec.get("access_request_pending") else 0,
                         rec.get("access_request_sent_at"),
                         1 if rec.get("notify_access_requests", True) else 0,
+                        1 if rec.get("telemetry_enabled") else 0,
                         rec.get("updated_at"),
                         rec.get("last_key_at"),
                         int(rec.get("key_issued_count") or 0),

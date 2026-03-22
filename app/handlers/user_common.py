@@ -197,6 +197,7 @@ def start_cmd(update: Update, context: CallbackContext) -> None:
                 "locale": rec.get("locale") or detect_locale(update),
                 "updated_at": datetime.utcnow().isoformat(timespec="seconds") + "Z",
                 "notify_access_requests": bool(rec.get("notify_access_requests", True)),
+                "telemetry_enabled": bool(rec.get("telemetry_enabled", False)),
                 "access_granted": bool(rec.get("access_granted", False)),
                 "access_request_pending": bool(rec.get("access_request_pending", False)),
             }

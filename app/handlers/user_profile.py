@@ -10,6 +10,7 @@ from telegram.ext import CallbackContext
 from config import ADMIN_IDS, APP_VERSION, LIST_PAGE_SIZE, MENU_TITLE, PARSE_MODE
 from domain.servers import get_access_methods_for_codes
 from i18n import get_locale_for_update, get_user_locale, set_user_locale, t
+from services.app_settings import is_global_telemetry_enabled, set_global_telemetry_enabled
 from services.server_registry import list_servers
 from services.awg_profiles import list_awg_server_keys
 from services.ssh_keys import render_public_key_guide
@@ -279,6 +280,14 @@ def _admin_notify_enabled(user_id: int) -> bool:
     return bool(rec.get("notify_access_requests", True))
 
 
+def _user_telemetry_enabled(user_id: int) -> bool:
+    users = users_store.read()
+    rec = users.get(str(user_id)) if isinstance(users, dict) else None
+    if not isinstance(rec, dict):
+        return False
+    return bool(rec.get("telemetry_enabled", False))
+
+
 def admin_menu_text_router(update: Update, context: CallbackContext) -> None:
     if not _is_admin(update):
         return
@@ -350,11 +359,12 @@ def on_menu_callback(update: Update, context: CallbackContext, payload: str) -> 
         return
 
     if payload == "settings":
+        telemetry_available = is_global_telemetry_enabled()
         safe_edit_message(
             update,
             context,
             t(lang, "settings.title"),
-            reply_markup=kb_settings_menu(lang),
+            reply_markup=kb_settings_menu(_user_telemetry_enabled(user.id if user else 0), telemetry_available, lang),
             parse_mode=PARSE_MODE,
         )
         return
@@ -382,11 +392,33 @@ def on_menu_callback(update: Update, context: CallbackContext, payload: str) -> 
 
     if payload.startswith("setlang:") and user:
         new_lang = set_user_locale(user.id, payload.split(":", 1)[1])
+        telemetry_available = is_global_telemetry_enabled()
         safe_edit_message(
             update,
             context,
             t(new_lang, "language.changed", label=t(new_lang, f"language.{new_lang}")),
-            reply_markup=kb_settings_menu(new_lang),
+            reply_markup=kb_settings_menu(_user_telemetry_enabled(user.id), telemetry_available, new_lang),
+            parse_mode=PARSE_MODE,
+        )
+        return
+
+    if payload == "settings_toggle_telemetry" and user:
+        if not is_global_telemetry_enabled():
+            safe_edit_message(
+                update,
+                context,
+                t(lang, "settings.title"),
+                reply_markup=kb_settings_menu(False, False, lang),
+                parse_mode=PARSE_MODE,
+            )
+            return
+        enabled = not _user_telemetry_enabled(user.id)
+        _set_admin_flag(user.id, telemetry_enabled=enabled)
+        safe_edit_message(
+            update,
+            context,
+            f"{t(lang, 'settings.saved')}\n\n{t(lang, 'settings.title')}",
+            reply_markup=kb_settings_menu(enabled, True, lang),
             parse_mode=PARSE_MODE,
         )
         return
@@ -396,7 +428,11 @@ def on_menu_callback(update: Update, context: CallbackContext, payload: str) -> 
             update,
             context,
             t(lang, "admin.settings.title"),
-            reply_markup=kb_admin_settings_menu(_admin_notify_enabled(user.id if user else 0), lang),
+            reply_markup=kb_admin_settings_menu(
+                _admin_notify_enabled(user.id if user else 0),
+                is_global_telemetry_enabled(),
+                lang,
+            ),
             parse_mode=PARSE_MODE,
         )
         return
@@ -408,7 +444,18 @@ def on_menu_callback(update: Update, context: CallbackContext, payload: str) -> 
             update,
             context,
             f"{t(lang, 'admin.settings.saved')}\n\n{t(lang, 'admin.settings.title')}",
-            reply_markup=kb_admin_settings_menu(enabled, lang),
+            reply_markup=kb_admin_settings_menu(enabled, is_global_telemetry_enabled(), lang),
+            parse_mode=PARSE_MODE,
+        )
+        return
+
+    if payload == "admin_settings_toggle_telemetry" and is_admin:
+        enabled = set_global_telemetry_enabled(not is_global_telemetry_enabled())
+        safe_edit_message(
+            update,
+            context,
+            f"{t(lang, 'admin.settings.saved')}\n\n{t(lang, 'admin.settings.title')}",
+            reply_markup=kb_admin_settings_menu(_admin_notify_enabled(user.id if user else 0), enabled, lang),
             parse_mode=PARSE_MODE,
         )
         return
@@ -510,6 +557,7 @@ def on_menu_callback(update: Update, context: CallbackContext, payload: str) -> 
             item["access_granted"] = False
             item["access_request_sent_at"] = datetime.utcnow().isoformat(timespec="seconds") + "Z"
             item["notify_access_requests"] = bool(item.get("notify_access_requests", True))
+            item["telemetry_enabled"] = bool(item.get("telemetry_enabled", False))
             users_db[str(user.id)] = item
             return users_db
 
@@ -650,8 +698,15 @@ def on_menu_callback(update: Update, context: CallbackContext, payload: str) -> 
         last_key_txt = _human_ago(last_key_at) if last_key_at else "—"
         username_text = _format_username(str(user.username or ""), lang)
         created_txt = _human_ago(created_at) if created_at else "—"
-        awg_usage = get_profile_monthly_usage(name, "awg")
-        awg_usage_txt = _format_bytes(int(awg_usage["total_bytes"]))
+        traffic_block = ""
+        if is_global_telemetry_enabled():
+            if _user_telemetry_enabled(user.id):
+                awg_usage = get_profile_monthly_usage(name, "awg")
+                awg_usage_txt = _format_bytes(int(awg_usage["total_bytes"]))
+                telemetry_line = t(lang, "profile.awg_traffic", value=awg_usage_txt)
+            else:
+                telemetry_line = t(lang, "profile.telemetry_disabled_user")
+            traffic_block = f"{t(lang, 'profile.traffic')}\n{telemetry_line}\n\n"
 
         safe_edit_message(
             update,
@@ -676,8 +731,7 @@ def on_menu_callback(update: Update, context: CallbackContext, payload: str) -> 
                 f"{t(lang, 'profile.access_section')}\n"
                 f"{server_access}\n"
                 + f"{t(lang, 'profile.frozen', value=frozen_flag)}\n\n"
-                f"{t(lang, 'profile.traffic')}\n"
-                f"{t(lang, 'profile.awg_traffic', value=awg_usage_txt)}\n\n"
+                f"{traffic_block}"
                 f"{t(lang, 'profile.activity')}\n"
                 f"{t(lang, 'profile.keys_issued', count=key_cnt)}\n"
                 f"{t(lang, 'profile.last_key', value=last_key_txt)}\n\n"

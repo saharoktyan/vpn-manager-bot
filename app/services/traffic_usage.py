@@ -7,6 +7,7 @@ from typing import Any, Dict
 from config import SQLITE_DB_PATH
 from db.schema import ensure_schema
 from db.sqlite_db import SQLiteDB
+from services.app_settings import is_global_telemetry_enabled
 from services.awg import extract_client_public_key, list_awg_peer_transfers
 from services.server_registry import list_servers
 
@@ -62,6 +63,8 @@ def record_traffic_sample(
 
 
 def _collect_awg_server_samples(server_key: str) -> tuple[int, str]:
+    if not is_global_telemetry_enabled():
+        return 0, "telemetry disabled globally"
     code, records, raw = list_awg_peer_transfers(server_key)
     if code != 0:
         return code, raw
@@ -78,8 +81,10 @@ def _collect_awg_server_samples(server_key: str) -> tuple[int, str]:
         rows = conn.execute(
             """
             SELECT profile_name, wg_conf
-            FROM awg_server_configs
-            WHERE server_key = ?
+            FROM awg_server_configs cfg
+            JOIN telegram_users tu ON tu.profile_name = cfg.profile_name
+            WHERE cfg.server_key = ?
+              AND tu.telemetry_enabled = 1
             ORDER BY profile_name
             """,
             (server_key,),
@@ -115,6 +120,8 @@ def _collect_awg_server_samples(server_key: str) -> tuple[int, str]:
 
 
 def collect_awg_traffic_samples() -> tuple[int, str]:
+    if not is_global_telemetry_enabled():
+        return 0, "telemetry disabled globally"
     blocks: list[str] = []
     errors = 0
     for server in list_servers():
@@ -139,6 +146,8 @@ def collect_traffic_job(_context: Any) -> None:
 
 
 def get_profile_monthly_usage(profile_name: str, protocol_kind: str = "awg") -> Dict[str, int]:
+    if not is_global_telemetry_enabled():
+        return {"rx_bytes": 0, "tx_bytes": 0, "total_bytes": 0, "samples": 0, "peers": 0}
     month_start = _month_start_iso()
     with _db.connect() as conn:
         rows = conn.execute(

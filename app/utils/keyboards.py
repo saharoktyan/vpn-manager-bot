@@ -150,16 +150,20 @@ def kb_language_menu(current_locale: str) -> InlineKeyboardMarkup:
     ])
 
 
-def kb_settings_menu(lang: str = "ru") -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton(t(lang, "menu.language"), callback_data=f"{CB_MENU}language")],
-        [InlineKeyboardButton(t(lang, "menu.back"), callback_data=f"{CB_MENU}main")],
-    ])
+def kb_settings_menu(telemetry_enabled: bool, telemetry_available: bool, lang: str = "ru") -> InlineKeyboardMarkup:
+    rows = [[InlineKeyboardButton(t(lang, "menu.language"), callback_data=f"{CB_MENU}language")]]
+    if telemetry_available:
+        telemetry_label = t(lang, "settings.telemetry_on") if telemetry_enabled else t(lang, "settings.telemetry_off")
+        rows.append([InlineKeyboardButton(telemetry_label, callback_data=f"{CB_MENU}settings_toggle_telemetry")])
+    rows.append([InlineKeyboardButton(t(lang, "menu.back"), callback_data=f"{CB_MENU}main")])
+    return InlineKeyboardMarkup(rows)
 
 
-def kb_admin_settings_menu(notify_enabled: bool, lang: str = "ru") -> InlineKeyboardMarkup:
+def kb_admin_settings_menu(notify_enabled: bool, telemetry_enabled: bool, lang: str = "ru") -> InlineKeyboardMarkup:
     label = t(lang, "admin.settings.notifications_on") if notify_enabled else t(lang, "admin.settings.notifications_off")
+    telemetry_label = t(lang, "admin.settings.telemetry_on") if telemetry_enabled else t(lang, "admin.settings.telemetry_off")
     return InlineKeyboardMarkup([
         [InlineKeyboardButton(label, callback_data=f"{CB_MENU}admin_settings_toggle_notify")],
+        [InlineKeyboardButton(telemetry_label, callback_data=f"{CB_MENU}admin_settings_toggle_telemetry")],
         [InlineKeyboardButton(t(lang, "menu.back"), callback_data=f"{CB_MENU}admin")],
     ])

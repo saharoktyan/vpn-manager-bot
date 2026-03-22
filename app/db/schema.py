@@ -67,6 +67,7 @@ BASE_DDL: Iterable[str] = (
         access_request_pending INTEGER NOT NULL DEFAULT 0,
         access_request_sent_at TEXT,
         notify_access_requests INTEGER NOT NULL DEFAULT 1,
+        telemetry_enabled INTEGER NOT NULL DEFAULT 0,
         updated_at TEXT,
         last_key_at TEXT,
         key_issued_count INTEGER NOT NULL DEFAULT 0
@@ -193,6 +194,8 @@ def _migrate_telegram_users_table(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE telegram_users ADD COLUMN access_request_sent_at TEXT")
     if columns and "notify_access_requests" not in columns:
         conn.execute("ALTER TABLE telegram_users ADD COLUMN notify_access_requests INTEGER NOT NULL DEFAULT 1")
+    if columns and "telemetry_enabled" not in columns:
+        conn.execute("ALTER TABLE telegram_users ADD COLUMN telemetry_enabled INTEGER NOT NULL DEFAULT 0")
 
 
 def _migrate_servers_table(conn: sqlite3.Connection) -> None:
@@ -409,4 +412,7 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
     _migrate_traffic_samples_table(conn)
     conn.execute(
         "INSERT OR REPLACE INTO schema_meta(key, value) VALUES ('schema_version', '4')"
+    )
+    conn.execute(
+        "INSERT OR IGNORE INTO schema_meta(key, value) VALUES ('telemetry_enabled_global', '0')"
     )
