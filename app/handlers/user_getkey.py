@@ -62,6 +62,10 @@ def _artifact_msg_key(kind: str, token: str) -> str:
     return f"getkey_artifact:{kind}:{token}"
 
 
+def _amnezia_qr_payload(vpn_key: str) -> str:
+    return str(vpn_key or "").removeprefix("vpn://")
+
+
 def _delete_all_getkey_artifacts(context: CallbackContext, chat_id: int) -> None:
     for key in [item for item in list(context.user_data.keys()) if str(item).startswith("getkey_artifact:")]:
         msg_id = context.user_data.get(key)
@@ -372,7 +376,7 @@ def on_getkey_callback(update: Update, context: CallbackContext, payload: str) -
         sent = _send_qr(
             context,
             chat_id,
-            key,
+            _amnezia_qr_payload(key),
             method.label,
             reply_markup=kb_getkey_attachment_back(f"getkey:awg_qr_back:{server_key}", lang),
         )
