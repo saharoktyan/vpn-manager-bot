@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from typing import Tuple
 
 from services.server_registry import RegisteredServer, get_server, update_server_fields
@@ -9,6 +10,16 @@ from services.server_runtime import run_server_command, write_server_file, write
 
 
 log = logging.getLogger("server_bootstrap")
+
+
+_JSON_OBJECT_AT_END_RE = re.compile(r"(\{[\s\S]*\})\s*$")
+
+
+def _extract_last_json_object(text: str) -> dict:
+    match = _JSON_OBJECT_AT_END_RE.search(text or "")
+    if not match:
+        raise ValueError("No JSON object found in output")
+    return json.loads(match.group(1))
 
 
 NODE_ENV_EXAMPLE = """# Xray
@@ -358,6 +369,7 @@ if [[ -d "$CONFIG_PATH" ]]; then
   mv "$CONFIG_PATH" "${CONFIG_PATH}.dirbak.$(date +%Y%m%d-%H%M%S)"
 fi
 
+docker pull "$IMAGE" >/dev/null 2>&1 || true
 X25519_OUT="$(docker run --rm "$IMAGE" x25519)"
 read -r PRIVATE_KEY REALITY_PASSWORD < <(
   XRAY_X25519_OUT="$X25519_OUT" python3 - <<'PY'
@@ -2065,7 +2077,7 @@ def sync_xray_server_settings(server_key: str) -> Tuple[int, str]:
     if rc != 0:
         return rc, out
     try:
-        generated = json.loads(out.strip().splitlines()[-1])
+        generated = _extract_last_json_object(out)
     except Exception:
         return 1, f"Could not parse synced Xray settings:\n{out[-1500:]}"
     update_server_fields(server.key, **generated)
@@ -2155,7 +2167,7 @@ def bootstrap_server(server_key: str) -> Tuple[int, str]:
             _mark(server, "bootstrap_failed", out[-1500:])
             return rc, out
         try:
-            generated = json.loads(out.strip().splitlines()[-1])
+            generated = _extract_last_json_object(out)
         except Exception:
             _mark(server, "bootstrap_failed", out[-1500:])
             return 1, f"Could not parse generated Xray settings:\n{out[-1500:]}"

@@ -16,7 +16,7 @@ from services.server_bootstrap import (
     sync_server_node_env,
     sync_xray_server_settings,
 )
-from services.server_registry import RegisteredServer, get_server, list_servers, upsert_server
+from services.server_registry import RegisteredServer, get_server, list_servers, update_server_fields, upsert_server
 from services.xray import get_server_link_status
 from utils.tg import answer_cb, safe_delete_by_id, safe_delete_update_message, safe_edit_by_ids, safe_edit_message
 
