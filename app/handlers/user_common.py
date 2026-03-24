@@ -16,17 +16,7 @@ from utils.keyboards import kb_main_menu
 
 def _touch_key_stat(context: CallbackContext, user_id: int) -> None:
     now = datetime.utcnow().isoformat(timespec="seconds") + "Z"
-
-    def mut(db: Dict[str, Any]) -> Dict[str, Any]:
-        rec = db.get(str(user_id))
-        if not isinstance(rec, dict):
-            rec = {}
-        rec["last_key_at"] = now
-        rec["key_issued_count"] = int(rec.get("key_issued_count") or 0) + 1
-        db[str(user_id)] = rec
-        return db
-
-    users_store.update(mut)
+    users_store.bump_key_stat(user_id, now)
 
 
 def _parse_iso(dt_str: str):

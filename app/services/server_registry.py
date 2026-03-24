@@ -78,11 +78,16 @@ class RegisteredServer:
 
 
 _db = SQLiteDB(SQLITE_DB_PATH)
+_schema_ready = False
 
 
-def _bootstrap() -> None:
+def _bootstrap(force: bool = False) -> None:
+    global _schema_ready
+    if _schema_ready and not force:
+        return
     with _db.transaction() as conn:
         ensure_schema(conn)
+    _schema_ready = True
 
 
 def _row_to_server(row) -> RegisteredServer:

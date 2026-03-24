@@ -101,6 +101,13 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "admin.cmd.sync_xray_error": "Ошибка sync Xray:\n```{output}```",
         "admin.cmd.sync_xray_ok": "✅ Xray settings synced for `{key}`.\n```json\n{output}\n```",
         "admin.cmd.diag_title": "📋 Диагностика",
+        "admin.cmd.usage_diag": "Использование:\n/diag\n/diag awg <server_key>\n/diag traffic <profile_name> <awg|xray>",
+        "admin.cmd.awg_diag_error": "Ошибка AWG diagnostics:\n```{output}```",
+        "admin.cmd.awg_diag_ok": "📋 AWG diagnostics for `{key}`\n```text\n{output}\n```",
+        "admin.cmd.traffic_diag_error": "Ошибка traffic diagnostics:\n```{output}```",
+        "admin.cmd.traffic_diag_ok": "📋 Traffic diagnostics for `{name}` / `{protocol}`\n```text\n{output}\n```",
+        "admin.cmd.collect_traffic_error": "Ошибка collect traffic:\n```text\n{output}\n```",
+        "admin.cmd.collect_traffic_ok": "✅ Traffic collection finished\n```text\n{output}\n```",
         "admin.cmd.usage_sub": "Использование: /sub <name> <inf|days|off>",
         "admin.cmd.sub_lifetime": "✅ Подписка *{name}* → бессрочная",
         "admin.cmd.sub_removed": "✅ Ограничение подписки для *{name}* снято.",
@@ -358,6 +365,13 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "admin.cmd.sync_xray_error": "Xray sync error:\n```{output}```",
         "admin.cmd.sync_xray_ok": "✅ Xray settings synced for `{key}`.\n```json\n{output}\n```",
         "admin.cmd.diag_title": "📋 Diagnostics",
+        "admin.cmd.usage_diag": "Usage:\n/diag\n/diag awg <server_key>\n/diag traffic <profile_name> <awg|xray>",
+        "admin.cmd.awg_diag_error": "AWG diagnostics error:\n```{output}```",
+        "admin.cmd.awg_diag_ok": "📋 AWG diagnostics for `{key}`\n```text\n{output}\n```",
+        "admin.cmd.traffic_diag_error": "Traffic diagnostics error:\n```{output}```",
+        "admin.cmd.traffic_diag_ok": "📋 Traffic diagnostics for `{name}` / `{protocol}`\n```text\n{output}\n```",
+        "admin.cmd.collect_traffic_error": "Collect traffic error:\n```text\n{output}\n```",
+        "admin.cmd.collect_traffic_ok": "✅ Traffic collection finished\n```text\n{output}\n```",
         "admin.cmd.usage_sub": "Usage: /sub <name> <inf|days|off>",
         "admin.cmd.sub_lifetime": "✅ Subscription for *{name}* → lifetime",
         "admin.cmd.sub_removed": "✅ Subscription limit removed for *{name}*.",
@@ -568,14 +582,5 @@ def get_locale_for_update(update: Update | None) -> str:
 
 def set_user_locale(user_id: int, locale: str) -> str:
     normalized = normalize_locale(locale)
-
-    def mut(db: dict[str, Any]) -> dict[str, Any]:
-        rec = db.get(str(user_id))
-        if not isinstance(rec, dict):
-            rec = {}
-        rec["locale"] = normalized
-        db[str(user_id)] = rec
-        return db
-
-    users_store.update(mut)
+    users_store.upsert_user(user_id, locale=normalized)
     return normalized

@@ -21,7 +21,7 @@ from services.awg import _extract_wg_conf, create_awg_user, delete_awg_user
 from services.awg_profiles import get_awg_servers, remove_awg_profile, remove_awg_server, upsert_awg_server
 from services.provisioning_state import delete_profile_server_state, reconcile_profile_state, upsert_profile_server_state
 from services.server_registry import list_servers
-from services.subscriptions import ensure_xray_caps, freeze_profile, is_frozen, subs_store, unfreeze_profile, utcnow, wg_store
+from services.subscriptions import ensure_xray_caps, freeze_profile, is_frozen, parse_stored_datetime, subs_store, unfreeze_profile, utcnow, wg_store
 from ui.admin_views import (
     render_delete_confirm,
     render_edit_menu,
@@ -251,11 +251,11 @@ def _load_existing(name: str) -> Tuple[Set[str], Optional[int]]:
             protocols = {str(code) for code in plist if get_access_method(str(code))}
         exp = rec.get("expires_at")
         if rec.get("type") not in ("none", "lifetime") and exp:
-            try:
-                exp_dt = datetime.fromisoformat(exp)
+            exp_dt = parse_stored_datetime(str(exp))
+            if exp_dt:
                 delta = exp_dt - utcnow()
                 sub_days = max(1, int(delta.total_seconds() // 86400))
-            except Exception:
+            else:
                 sub_days = 30
     for server_key in get_awg_servers(name).keys():
         method = get_awg_access_method_by_server_key(server_key)

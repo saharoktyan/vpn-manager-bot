@@ -60,6 +60,7 @@ def main() -> None:
     dp.add_handler(CommandHandler("syncnodeenv", admin_handlers.syncnodeenv_cmd))
     dp.add_handler(CommandHandler("probeserver", admin_handlers.probeserver_cmd))
     dp.add_handler(CommandHandler("bootstrapserver", admin_handlers.bootstrapserver_cmd))
+    dp.add_handler(CommandHandler("collecttraffic", admin_handlers.collecttraffic_cmd))
     dp.add_handler(CommandHandler("diag", admin_handlers.diag_cmd))
     dp.add_handler(CommandHandler("setxrayserver", admin_handlers.setxrayserver_cmd))
     dp.add_handler(CommandHandler("syncxrayserver", admin_handlers.syncxrayserver_cmd))

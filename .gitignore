@@ -36,3 +36,4 @@ ssh/
 .vscode/
 .DS_Store
 Thumbs.db
+kitty-info

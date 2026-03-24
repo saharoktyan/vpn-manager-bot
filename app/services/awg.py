@@ -36,6 +36,23 @@ def delete_awg_user(server_key: str, name: str) -> Tuple[int, str]:
 _WG_CONF_RE = re.compile(r"(\[Interface\][\s\S]*?\n\[Peer\][\s\S]*?)(?:\n=+|\Z)")
 
 
+def _parse_wg_sections(text: str) -> dict[str, dict[str, str]]:
+    sections: dict[str, dict[str, str]] = {}
+    current: str | None = None
+    for raw_line in (text or "").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or line.startswith(";"):
+            continue
+        if line.startswith("[") and line.endswith("]"):
+            current = line[1:-1].strip().lower()
+            sections.setdefault(current, {})
+            continue
+        if current and "=" in line:
+            key, value = line.split("=", 1)
+            sections[current][key.strip().lower()] = value.strip()
+    return sections
+
+
 def _extract_wg_conf(text: str) -> str | None:
     if not text:
         return None
@@ -47,13 +64,9 @@ def _extract_wg_conf(text: str) -> str | None:
 
 
 def extract_client_public_key(wg_conf: str) -> str | None:
-    if not wg_conf:
-        return None
-    for raw_line in wg_conf.splitlines():
-        line = raw_line.strip()
-        if line.startswith("PublicKey = "):
-            return line.split("=", 1)[1].strip() or None
-    return None
+    sections = _parse_wg_sections(wg_conf)
+    value = sections.get("interface", {}).get("publickey")
+    return value or None
 
 
 def list_awg_peer_transfers(server_key: str) -> Tuple[int, List[Dict[str, int | str]], str]:

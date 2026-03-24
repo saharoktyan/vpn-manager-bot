@@ -23,6 +23,7 @@ class SQLiteDB:
     def transaction(self) -> Iterator[sqlite3.Connection]:
         conn = self.connect()
         try:
+            conn.execute("BEGIN IMMEDIATE")
             yield conn
             conn.commit()
         except Exception:

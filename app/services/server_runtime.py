@@ -17,6 +17,12 @@ from services.ssh_keys import ensure_ssh_keypair
 log = logging.getLogger("server_runtime")
 
 
+def _mask_command_for_log(cmd: str) -> str:
+    if "base64.b64decode(" in cmd or "python3 - <<'PY'" in cmd:
+        return "[redacted scripted payload]"
+    return cmd
+
+
 def _ssh_control_path(server: RegisteredServer) -> str:
     control_dir = "/tmp/vpn-manager-bot-ssh"
     os.makedirs(control_dir, mode=0o700, exist_ok=True)
@@ -43,7 +49,7 @@ def is_running_in_container() -> bool:
 
 def run_local_command(cmd: str, timeout: int = 60) -> Tuple[int, str]:
     t0 = time.time()
-    log.info("RUN: %s", cmd)
+    log.info("RUN: %s", _mask_command_for_log(cmd))
     try:
         proc = subprocess.run(
             ["/usr/bin/bash", "-lc", cmd],

@@ -19,6 +19,7 @@ logger = logging.getLogger(__name__)
 
 _sqlite_db = SQLiteDB(SQLITE_DB_PATH)
 _wg_json_store = JsonStore(WG_DB_PATH)
+_runtime_ready = False
 
 
 def _sqlite_counts() -> Tuple[int, int, int]:
@@ -32,6 +33,9 @@ def _sqlite_counts() -> Tuple[int, int, int]:
 
 
 def _bootstrap_sqlite_runtime() -> None:
+    global _runtime_ready
+    if _runtime_ready:
+        return
     with _sqlite_db.transaction() as conn:
         ensure_schema(conn)
     profile_count, user_count, awg_count = _sqlite_counts()
@@ -49,7 +53,7 @@ def _bootstrap_sqlite_runtime() -> None:
     if awg_count == 0 and json_awg > 0:
         logger.info("Bootstrapping SQLite from JSON: importing AWG configs")
         migrate_json_to_sqlite(SQLITE_DB_PATH)
-
+    _runtime_ready = True
 
 _bootstrap_sqlite_runtime()
 
@@ -58,6 +62,19 @@ users_store = SQLiteTelegramUsersStore(_sqlite_db)
 wg_store = SQLiteAWGStore(_sqlite_db)
 
 _AWG_VPN_RE = re.compile(r"(vpn://[A-Za-z0-9+/=_-]+)")
+
+
+def parse_stored_datetime(value: str | None) -> datetime | None:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    try:
+        dt = datetime.fromisoformat(raw)
+    except Exception:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
 
 def utcnow() -> datetime:
     return datetime.now(timezone.utc)
@@ -101,9 +118,8 @@ def get_subscription_status(name: str) -> Dict[str, Any]:
         txt = "Подписка: *бессрочная*"
         return {"active": True, "frozen": frozen, "text": txt + ("\nСтатус: *заморожена* 🧊" if frozen else "")}
 
-    try:
-        exp_dt = datetime.fromisoformat(exp)
-    except Exception:
+    exp_dt = parse_stored_datetime(exp)
+    if not exp_dt:
         return {"active": True, "frozen": frozen, "text": "Подписка: *неизвестна* (ошибка даты)"}
 
     now = utcnow()

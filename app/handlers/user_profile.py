@@ -231,15 +231,7 @@ def _open_requests_dashboard(update: Update, context: CallbackContext, lang: str
 
 
 def _set_admin_flag(user_id: int, **fields: Any) -> None:
-    def mut(db: Dict[str, Any]) -> Dict[str, Any]:
-        rec = db.get(str(user_id))
-        if not isinstance(rec, dict):
-            rec = {}
-        rec.update(fields)
-        db[str(user_id)] = rec
-        return db
-
-    users_store.update(mut)
+    users_store.upsert_user(user_id, **fields)
 
 
 def _ensure_profile_for_request(user_id: int) -> str:

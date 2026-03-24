@@ -10,6 +10,7 @@ from services.server_registry import get_server
 
 
 _db = SQLiteDB(SQLITE_DB_PATH)
+_schema_ready = False
 
 
 def _now_iso() -> str:
@@ -17,11 +18,12 @@ def _now_iso() -> str:
 
 
 def _ensure_runtime_schema() -> None:
+    global _schema_ready
+    if _schema_ready:
+        return
     with _db.transaction() as conn:
         ensure_schema(conn)
-
-
-_ensure_runtime_schema()
+    _schema_ready = True
 
 
 def upsert_profile_server_state(
@@ -34,6 +36,7 @@ def upsert_profile_server_state(
     remote_id: Optional[str] = None,
     last_error: Optional[str] = None,
 ) -> None:
+    _ensure_runtime_schema()
     now = _now_iso()
     with _db.transaction() as conn:
         conn.execute(
@@ -64,6 +67,7 @@ def upsert_profile_server_state(
 
 
 def delete_profile_server_state(profile_name: str, server_key: str, protocol_kind: Optional[str] = None) -> None:
+    _ensure_runtime_schema()
     with _db.transaction() as conn:
         if protocol_kind:
             conn.execute(
@@ -84,6 +88,7 @@ def delete_profile_server_state(profile_name: str, server_key: str, protocol_kin
 
 
 def list_profile_server_states(profile_name: str) -> List[Dict[str, Any]]:
+    _ensure_runtime_schema()
     with _db.connect() as conn:
         rows = conn.execute(
             """
@@ -99,6 +104,7 @@ def list_profile_server_states(profile_name: str) -> List[Dict[str, Any]]:
 
 
 def list_server_provisioning_states(server_key: str) -> List[Dict[str, Any]]:
+    _ensure_runtime_schema()
     with _db.connect() as conn:
         rows = conn.execute(
             """

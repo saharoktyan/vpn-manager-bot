@@ -12,6 +12,7 @@ from i18n import get_locale_for_update, t
 from services.server_bootstrap import bootstrap_server, probe_server, sync_xray_server_settings
 from services.server_registry import list_servers, update_server_fields, upsert_server
 from services.ssh_keys import render_public_key_guide
+from services.traffic_usage import debug_awg_traffic_report, debug_profile_traffic_report, run_collect_traffic_once
 from services import xray as xray_svc
 from services.subscriptions import ensure_xray_caps, subs_store, utcnow
 from config import APP_VERSION
@@ -270,6 +271,46 @@ def diag_cmd(update: Update, context: CallbackContext) -> None:
     if not guard(update):
         return
     lang = get_locale_for_update(update)
+    parts = (update.effective_message.text or "").strip().split()
+    if len(parts) >= 3 and parts[1].lower() == "awg":
+        server_key = parts[2]
+        code, out = debug_awg_traffic_report(server_key)
+        if code != 0:
+            update.effective_message.reply_text(
+                t(lang, "admin.cmd.awg_diag_error", output=out[-3000:]),
+                parse_mode=PARSE_MODE,
+                reply_markup=kb_back_menu(lang),
+            )
+            return
+        update.effective_message.reply_text(
+            t(lang, "admin.cmd.awg_diag_ok", key=server_key, output=out[-3500:]),
+            parse_mode=PARSE_MODE,
+            reply_markup=kb_back_menu(lang),
+        )
+        return
+    if len(parts) >= 4 and parts[1].lower() == "traffic":
+        profile_name = parts[2].lstrip("@")
+        protocol_kind = parts[3].lower()
+        code, out = debug_profile_traffic_report(profile_name, protocol_kind)
+        if code != 0:
+            update.effective_message.reply_text(
+                t(lang, "admin.cmd.traffic_diag_error", output=out[-3000:]),
+                parse_mode=PARSE_MODE,
+                reply_markup=kb_back_menu(lang),
+            )
+            return
+        update.effective_message.reply_text(
+            t(lang, "admin.cmd.traffic_diag_ok", name=profile_name, protocol=protocol_kind, output=out[-3500:]),
+            parse_mode=PARSE_MODE,
+            reply_markup=kb_back_menu(lang),
+        )
+        return
+    if len(parts) >= 2:
+        update.effective_message.reply_text(
+            t(lang, "admin.cmd.usage_diag"),
+            reply_markup=kb_back_menu(lang),
+        )
+        return
     servers = list_servers(include_disabled=True)
     xray_ready = 0
     awg_ready = 0
@@ -286,6 +327,25 @@ def diag_cmd(update: Update, context: CallbackContext) -> None:
         f"awg_ready: `{awg_ready}`\n"
     )
     update.effective_message.reply_text(text, parse_mode=PARSE_MODE, reply_markup=kb_back_menu(lang))
+
+
+def collecttraffic_cmd(update: Update, context: CallbackContext) -> None:
+    if not guard(update):
+        return
+    lang = get_locale_for_update(update)
+    code, out = run_collect_traffic_once()
+    if code != 0:
+        update.effective_message.reply_text(
+            t(lang, "admin.cmd.collect_traffic_error", output=out[-3000:]),
+            parse_mode=PARSE_MODE,
+            reply_markup=kb_back_menu(lang),
+        )
+        return
+    update.effective_message.reply_text(
+        t(lang, "admin.cmd.collect_traffic_ok", output=out[-3000:]),
+        parse_mode=PARSE_MODE,
+        reply_markup=kb_back_menu(lang),
+    )
 
 
 def sub_cmd(update: Update, context: CallbackContext) -> None:
