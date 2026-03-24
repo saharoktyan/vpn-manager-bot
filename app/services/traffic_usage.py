@@ -92,7 +92,7 @@ def _collect_awg_server_samples(server_key: str) -> tuple[int, str]:
             JOIN telegram_users tu ON tu.profile_name = cfg.profile_name
             WHERE cfg.server_key = ?
               AND tu.telemetry_enabled = 1
-            ORDER BY profile_name
+            ORDER BY cfg.profile_name
             """,
             (server_key,),
         ).fetchall()

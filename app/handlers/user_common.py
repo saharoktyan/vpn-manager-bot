@@ -10,7 +10,7 @@ from telegram.ext import CallbackContext
 from config import ADMIN_IDS, APP_VERSION, MENU_TITLE, PARSE_MODE
 from domain.servers import get_access_methods_for_codes, get_tracked_awg_server_keys
 from i18n import detect_locale, get_locale_for_update, t
-from services.subscriptions import get_profile, users_store
+from services.subscriptions import get_profile, subs_store, users_store
 from utils.keyboards import kb_main_menu
 
 
@@ -161,7 +161,23 @@ def _resolve_profile_name(user_id: int | None) -> str | None:
     if not isinstance(rec, dict):
         return None
     profile_name = str(rec.get("profile_name") or "").strip()
-    return profile_name or None
+    if profile_name and get_profile(profile_name):
+        return profile_name
+    candidate = str(rec.get("username") or "").strip().lstrip("@")
+    if candidate:
+        if get_profile(candidate):
+            users_store.upsert_user(user_id, profile_name=candidate)
+            return candidate
+        candidate_lower = candidate.lower()
+        profiles = subs_store.read()
+        for name, profile_rec in profiles.items():
+            if not isinstance(profile_rec, dict):
+                continue
+            normalized = str(name).strip()
+            if normalized and normalized.lower() == candidate_lower:
+                users_store.upsert_user(user_id, profile_name=normalized)
+                return normalized
+    return None
 
 
 def start_cmd(update: Update, context: CallbackContext) -> None:

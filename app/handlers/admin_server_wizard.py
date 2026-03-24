@@ -7,9 +7,16 @@ from telegram.ext import CallbackContext
 
 from config import CB_MENU, CB_SRV, PARSE_MODE
 from i18n import get_locale_for_update, t
-from services.provisioning_state import reconcile_server_state, render_server_provisioning_summary, summarize_server_provisioning
+from services.provisioning_state import (
+    reconcile_server_state,
+    reconcile_xray_server_state,
+    render_server_provisioning_summary,
+    summarize_server_provisioning,
+)
 from services.server_bootstrap import (
     bootstrap_server,
+    check_server_ports,
+    open_server_ports,
     probe_server,
     regenerate_awg_entropy,
     show_awg_entropy,
@@ -301,6 +308,8 @@ def _server_card_text(server: RegisteredServer, lang: str) -> str:
         f"awg_iface: {server.awg_iface}",
         f"awg_i1_preset: {server.awg_i1_preset}",
         "",
+        t(lang, "admin.wizard.server_ports_hint"),
+        "",
         f"provisioning:\n{provisioning_text}",
     ]
     if server.notes:
@@ -314,6 +323,10 @@ def _server_card_markup(server_key: str, lang: str) -> InlineKeyboardMarkup:
             [
                 InlineKeyboardButton(t(lang, "admin.wizard.probe"), callback_data=f"{CB_SRV}action:probe:{server_key}"),
                 InlineKeyboardButton(t(lang, "admin.wizard.bootstrap"), callback_data=f"{CB_SRV}action:bootstrap:{server_key}"),
+            ],
+            [
+                InlineKeyboardButton(t(lang, "admin.wizard.check_ports"), callback_data=f"{CB_SRV}action:checkports:{server_key}"),
+                InlineKeyboardButton(t(lang, "admin.wizard.open_ports"), callback_data=f"{CB_SRV}action:openports:{server_key}"),
             ],
             [
                 InlineKeyboardButton(t(lang, "admin.wizard.sync_env"), callback_data=f"{CB_SRV}action:syncenv:{server_key}"),
@@ -803,7 +816,7 @@ def on_server_callback(update: Update, context: CallbackContext, payload: str) -
                 else:
                     w["step"] = "title"
                     _wizard_set(context, w)
-                    _wizard_edit(context, t(lang, "admin.wizard.server_edit", key=data["key"], title=data["title"]), _step_nav_markup(lang, next_payload=f"{CB_SRV}next"))
+                    _wizard_edit(context, t(lang, "admin.wizard.server_edit", server=data["key"], title=data["title"]), _step_nav_markup(lang, next_payload=f"{CB_SRV}next"))
                 return
             if w["step"] == "region":
                 if w.get("edit_single"):
@@ -922,7 +935,7 @@ def on_server_callback(update: Update, context: CallbackContext, payload: str) -
         _wizard_set(context, w)
         _wizard_edit(
             context,
-            t(lang, "admin.wizard.server_edit", key=_md(server_key), title=_md(server.title)),
+            t(lang, "admin.wizard.server_edit", server=_md(server_key), title=_md(server.title)),
             _step_nav_markup(lang, next_payload=f"{CB_SRV}next"),
         )
         return
@@ -936,6 +949,14 @@ def on_server_callback(update: Update, context: CallbackContext, payload: str) -
         if action == "bootstrap":
             rc, out = bootstrap_server(server_key)
             _wizard_edit(context, _action_result_text(t(lang, "admin.wizard.bootstrap"), rc, out, server_key), _server_card_markup(server_key, lang))
+            return
+        if action == "checkports":
+            rc, out = check_server_ports(server_key)
+            _wizard_edit(context, _action_result_text(t(lang, "admin.wizard.check_ports"), rc, out, server_key), _server_card_markup(server_key, lang))
+            return
+        if action == "openports":
+            rc, out = open_server_ports(server_key)
+            _wizard_edit(context, _action_result_text(t(lang, "admin.wizard.open_ports"), rc, out, server_key), _server_card_markup(server_key, lang))
             return
         if action == "syncenv":
             rc, out = sync_server_node_env(server_key)
@@ -1151,6 +1172,27 @@ def setserverfield_cmd(update: Update, context: CallbackContext) -> None:
         return
     key, field, value = parts[1], parts[2], parts[3]
     int_fields = {"ssh_port", "xray_tcp_port", "xray_xhttp_port", "awg_port"}
+    runtime_fields = {
+        "protocol_kinds",
+        "public_host",
+        "xray_config_path",
+        "xray_service_name",
+        "xray_host",
+        "xray_sni",
+        "xray_pbk",
+        "xray_sid",
+        "xray_short_id",
+        "xray_fp",
+        "xray_flow",
+        "xray_tcp_port",
+        "xray_xhttp_port",
+        "xray_xhttp_path_prefix",
+        "awg_config_path",
+        "awg_iface",
+        "awg_public_host",
+        "awg_port",
+        "awg_i1_preset",
+    }
     if field in int_fields:
         value_obj: object = int(value)
     elif field == "protocol_kinds":
@@ -1159,9 +1201,15 @@ def setserverfield_cmd(update: Update, context: CallbackContext) -> None:
         value_obj = value.lower() in {"1", "true", "yes", "on"}
     else:
         value_obj = value
-    server = update_server_fields(key, **{field: value_obj})
+    update_fields = {field: value_obj}
+    if field in runtime_fields:
+        update_fields["bootstrap_state"] = "edited"
+    server = update_server_fields(key, **update_fields)
+    text = t(lang, "admin.cmd.field_updated", field=_md(field), value=_md(value), server=_md(server.key))
+    if field in runtime_fields:
+        text = f"{text}\n\n{t(lang, 'admin.cmd.field_updated_runtime_note')}"
     update.effective_message.reply_text(
-        t(lang, "admin.cmd.field_updated", field=_md(field), value=_md(value), key=_md(server.key)),
+        text,
         parse_mode=None,
         reply_markup=kb_back_menu(lang),
     )

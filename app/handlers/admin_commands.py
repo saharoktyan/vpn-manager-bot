@@ -139,7 +139,7 @@ def addserver_cmd(update: Update, context: CallbackContext) -> None:
         bootstrap_state="new",
     )
     update.effective_message.reply_text(
-        t(lang, "admin.cmd.server_registered", key=server.key, flag=server.flag, title=server.title, transport=server.transport, protocols=", ".join(server.protocol_kinds) or "—"),
+        t(lang, "admin.cmd.server_registered", server=server.key, flag=server.flag, title=server.title, transport=server.transport, protocols=", ".join(server.protocol_kinds) or "—"),
         parse_mode=PARSE_MODE,
         reply_markup=kb_back_menu(lang),
     )
@@ -192,7 +192,7 @@ def bootstrapserver_cmd(update: Update, context: CallbackContext) -> None:
         update.effective_message.reply_text(t(lang, "admin.cmd.usage_bootstrapserver"))
         return
     key = parts[1]
-    update.effective_message.reply_text(t(lang, "admin.cmd.bootstrap_running", key=key), parse_mode=PARSE_MODE)
+    update.effective_message.reply_text(t(lang, "admin.cmd.bootstrap_running", server=key), parse_mode=PARSE_MODE)
     code, out = bootstrap_server(key)
     if code != 0:
         update.effective_message.reply_text(
@@ -237,7 +237,7 @@ def setxrayserver_cmd(update: Update, context: CallbackContext) -> None:
         xray_xhttp_path_prefix=path_prefix,
     )
     update.effective_message.reply_text(
-        t(lang, "admin.cmd.xray_settings_updated", key=server.key, host=server.xray_host, sni=server.xray_sni, tcp=server.xray_tcp_port, xhttp=server.xray_xhttp_port),
+        t(lang, "admin.cmd.xray_settings_updated", server=server.key, host=server.xray_host, sni=server.xray_sni, tcp=server.xray_tcp_port, xhttp=server.xray_xhttp_port),
         parse_mode=PARSE_MODE,
         reply_markup=kb_back_menu(lang),
     )
@@ -261,7 +261,7 @@ def syncxrayserver_cmd(update: Update, context: CallbackContext) -> None:
         )
         return
     update.effective_message.reply_text(
-        t(lang, "admin.cmd.sync_xray_ok", key=key, output=out[:3000]),
+        t(lang, "admin.cmd.sync_xray_ok", server=key, output=out[:3000]),
         parse_mode=PARSE_MODE,
         reply_markup=kb_back_menu(lang),
     )
@@ -283,7 +283,7 @@ def diag_cmd(update: Update, context: CallbackContext) -> None:
             )
             return
         update.effective_message.reply_text(
-            t(lang, "admin.cmd.awg_diag_ok", key=server_key, output=out[-3500:]),
+            t(lang, "admin.cmd.awg_diag_ok", server=server_key, output=out[-3500:]),
             parse_mode=PARSE_MODE,
             reply_markup=kb_back_menu(lang),
         )
@@ -321,12 +321,12 @@ def diag_cmd(update: Update, context: CallbackContext) -> None:
             awg_ready += 1
     text = (
         f"{t(lang, 'admin.cmd.diag_title')}\n\n"
-        f"version: `{APP_VERSION}`\n"
-        f"servers_total: `{len(servers)}`\n"
-        f"xray_ready: `{xray_ready}`\n"
-        f"awg_ready: `{awg_ready}`\n"
+        f"version: {APP_VERSION}\n"
+        f"servers_total: {len(servers)}\n"
+        f"xray_ready: {xray_ready}\n"
+        f"awg_ready: {awg_ready}\n"
     )
-    update.effective_message.reply_text(text, parse_mode=PARSE_MODE, reply_markup=kb_back_menu(lang))
+    update.effective_message.reply_text(text, parse_mode=None, reply_markup=kb_back_menu(lang))
 
 
 def collecttraffic_cmd(update: Update, context: CallbackContext) -> None:

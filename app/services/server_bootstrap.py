@@ -13,6 +13,7 @@ log = logging.getLogger("server_bootstrap")
 
 
 _JSON_OBJECT_AT_END_RE = re.compile(r"(\{[\s\S]*\})\s*$")
+AWG_RUNTIME_CONTAINER = "amnezia-awg"
 
 
 def _extract_last_json_object(text: str) -> dict:
@@ -1978,7 +1979,7 @@ def render_server_node_env(server: RegisteredServer) -> str:
         f"XRAY_DOCKER_IMAGE=ghcr.io/xtls/xray-core:25.12.8\n"
         f"XRAY_INBOUND_TCP_TAG=reality-tcp\n"
         f"XRAY_INBOUND_XHTTP_TAG=reality-xhttp\n"
-        f"AWG_CONTAINER_NAME=amnezia-awg\n"
+        f"AWG_CONTAINER_NAME={AWG_RUNTIME_CONTAINER}\n"
         f"AWG_DOCKER_DIR=/opt/vpn-manager-node/amnezia-awg\n"
         f"AWG_DOCKER_IMAGE=vpn-bot-amnezia-awg:latest\n"
         f"AWG_IFACE={server.awg_iface}\n"
@@ -2005,6 +2006,302 @@ def sync_server_node_env(server_key: str) -> Tuple[int, str]:
         return rc, out
     update_server_fields(server.key, notes="node.env synced from bot")
     return 0, "node.env written to /etc/vpn-bot/node.env"
+
+
+def _check_server_ports(server) -> Tuple[int, str]:
+    checks: list[tuple[str, str, int]] = []
+    if "xray" in server.protocol_kinds:
+        checks.append(("xray_tcp_port", "tcp", int(server.xray_tcp_port)))
+        checks.append(("xray_xhttp_port", "tcp", int(server.xray_xhttp_port)))
+    if "awg" in server.protocol_kinds:
+        checks.append(("awg_port", "udp", int(server.awg_port)))
+    if not checks:
+        return 0, "port_check: skipped"
+
+    payload = "\n".join(f"{field}|{proto}|{port}" for field, proto, port in checks)
+    cmd = f"""#!/usr/bin/env bash
+set -euo pipefail
+
+cat <<'EOF' >/tmp/vpn-bot-port-check.txt
+{payload}
+EOF
+
+docker_cmd() {{
+  if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
+    docker "$@"
+    return
+  fi
+  if command -v sudo >/dev/null 2>&1 && sudo docker info >/dev/null 2>&1; then
+    sudo docker "$@"
+    return
+  fi
+  return 1
+}}
+
+container_running() {{
+  local name="$1"
+  docker_cmd ps --format '{{{{.Names}}}}' 2>/dev/null | grep -q "^${{name}}$"
+}}
+
+is_busy_tcp() {{
+  local port="$1"
+  if command -v ss >/dev/null 2>&1; then
+    ss -H -ltn "( sport = :$port )" 2>/dev/null | grep -q .
+    return $?
+  fi
+  netstat -ltn 2>/dev/null | awk '{{print $4}}' | grep -Eq '[:.]'"$port"'$'
+}}
+
+is_busy_udp() {{
+  local port="$1"
+  if command -v ss >/dev/null 2>&1; then
+    ss -H -lun "( sport = :$port )" 2>/dev/null | grep -q .
+    return $?
+  fi
+  netstat -lun 2>/dev/null | awk '{{print $4}}' | grep -Eq '[:.]'"$port"'$'
+}}
+
+find_free_tcp() {{
+  local start="$1"
+  local end=$((start + 50))
+  local port
+  for ((port=start+1; port<=end; port++)); do
+    if ! is_busy_tcp "$port"; then
+      echo "$port"
+      return 0
+    fi
+  done
+  echo ""
+}}
+
+find_free_udp() {{
+  local start="$1"
+  local end=$((start + 50))
+  local port
+  for ((port=start+1; port<=end; port++)); do
+    if ! is_busy_udp "$port"; then
+      echo "$port"
+      return 0
+    fi
+  done
+  echo ""
+}}
+
+has_ufw_rules() {{
+  command -v iptables >/dev/null 2>&1 && iptables -S ufw-user-input >/dev/null 2>&1
+}}
+
+firewall_allows() {{
+  local proto="$1"
+  local port="$2"
+  if has_ufw_rules; then
+    iptables -C ufw-user-input -p "$proto" --dport "$port" -j ACCEPT >/dev/null 2>&1
+    return $?
+  fi
+  return 0
+}}
+
+is_managed_xray_port() {{
+  local field="$1"
+  local port="$2"
+  local container="{server.xray_service_name}"
+  local cfg="{server.xray_config_path}"
+  container_running "$container" || return 1
+  [[ -f "$cfg" ]] || return 1
+  XRAY_FIELD="$field" XRAY_PORT="$port" XRAY_CFG="$cfg" python3 - <<'PY'
+import json
+import os
+import sys
+
+field = os.environ["XRAY_FIELD"]
+port = int(os.environ["XRAY_PORT"])
+cfg_path = os.environ["XRAY_CFG"]
+tag_map = {{
+    "xray_tcp_port": "reality-tcp",
+    "xray_xhttp_port": "reality-xhttp",
+}}
+tag = tag_map.get(field)
+if not tag:
+    sys.exit(1)
+try:
+    with open(cfg_path, "r", encoding="utf-8") as fh:
+        data = json.load(fh)
+except Exception:
+    sys.exit(1)
+for inbound in data.get("inbounds", []) or []:
+    if str(inbound.get("tag") or "") != tag:
+        continue
+    try:
+        inbound_port = int(inbound.get("port") or 0)
+    except Exception:
+        inbound_port = 0
+    if inbound_port == port:
+        sys.exit(0)
+sys.exit(1)
+PY
+}}
+
+is_managed_awg_port() {{
+  local port="$1"
+  local container="{AWG_RUNTIME_CONTAINER}"
+  local cfg="{server.awg_config_path}"
+  container_running "$container" || return 1
+  [[ -f "$cfg" ]] || return 1
+  AWG_PORT="$port" AWG_CFG="$cfg" python3 - <<'PY'
+import os
+import re
+import sys
+
+port = int(os.environ["AWG_PORT"])
+cfg_path = os.environ["AWG_CFG"]
+listen_port = None
+try:
+    with open(cfg_path, "r", encoding="utf-8", errors="ignore") as fh:
+        for raw in fh:
+            line = raw.strip()
+            if not line or line.startswith("#"):
+                continue
+            m = re.match(r"^ListenPort\\s*=\\s*(\\d+)\\s*$", line)
+            if m:
+                listen_port = int(m.group(1))
+                break
+except Exception:
+    sys.exit(1)
+sys.exit(0 if listen_port == port else 1)
+PY
+}}
+
+while IFS='|' read -r field proto port; do
+  [[ -n "$field" ]] || continue
+  if [[ "$proto" == "tcp" ]]; then
+    if is_busy_tcp "$port"; then
+      if is_managed_xray_port "$field" "$port"; then
+        echo "PORT_STATUS|$field|$proto|$port|managed|"
+      else
+        echo "PORT_STATUS|$field|$proto|$port|busy|$(find_free_tcp "$port")"
+      fi
+    else
+      echo "PORT_STATUS|$field|$proto|$port|free|"
+    fi
+  else
+    if is_busy_udp "$port"; then
+      if [[ "$field" == "awg_port" ]] && is_managed_awg_port "$port"; then
+        echo "PORT_STATUS|$field|$proto|$port|managed|"
+      else
+        echo "PORT_STATUS|$field|$proto|$port|busy|$(find_free_udp "$port")"
+      fi
+    else
+      echo "PORT_STATUS|$field|$proto|$port|free|"
+    fi
+  fi
+  if firewall_allows "$proto" "$port"; then
+    echo "FIREWALL_STATUS|$field|$proto|$port|open|"
+  else
+    echo "FIREWALL_STATUS|$field|$proto|$port|closed|ufw allow $port/$proto"
+  fi
+done </tmp/vpn-bot-port-check.txt
+rm -f /tmp/vpn-bot-port-check.txt
+"""
+    rc, out = run_server_command(server, cmd, timeout=30)
+    if rc != 0:
+        return rc, out
+
+    conflicts: list[str] = []
+    firewall_conflicts: list[str] = []
+    suggestions: list[str] = []
+    firewall_suggestions: list[str] = []
+    for raw_line in (out or "").splitlines():
+        line = raw_line.strip()
+        if line.startswith("PORT_STATUS|"):
+            _, field, proto, port, status, suggestion = (line.split("|", 5) + [""])[:6]
+            if status == "managed":
+                continue
+            if status == "busy":
+                conflicts.append(f"- {field}: {port}/{proto} busy")
+                if suggestion.strip():
+                    suggestions.append(f"/setserverfield {server.key} {field} {suggestion.strip()}")
+            continue
+        if line.startswith("FIREWALL_STATUS|"):
+            _, field, proto, port, status, suggestion = (line.split("|", 5) + [""])[:6]
+            if status == "closed":
+                firewall_conflicts.append(f"- {field}: {port}/{proto} is not open in firewall")
+                if suggestion.strip():
+                    firewall_suggestions.append(suggestion.strip())
+    if conflicts or firewall_conflicts:
+        lines = [
+            f"Port availability check failed for server {server.key}.",
+        ]
+        if conflicts:
+            lines.extend(["Busy ports:", *conflicts])
+        if firewall_conflicts:
+            if conflicts:
+                lines.append("")
+            lines.extend(["Firewall rules missing:", *firewall_conflicts])
+        if suggestions:
+            lines.extend(["", "Suggested commands:", *[f"- {item}" for item in suggestions]])
+        if firewall_suggestions:
+            lines.extend(["", "Suggested firewall commands:", *[f"- {item}" for item in firewall_suggestions]])
+        return 1, "\n".join(lines)
+    return 0, out
+
+
+def check_server_ports(server_key: str) -> Tuple[int, str]:
+    server = get_server(server_key)
+    if not server:
+        return 1, f"Server {server_key} not found"
+    return _check_server_ports(server)
+
+
+def open_server_ports(server_key: str) -> Tuple[int, str]:
+    server = get_server(server_key)
+    if not server:
+        return 1, f"Server {server_key} not found"
+
+    checks: list[tuple[str, str, int]] = []
+    if "xray" in server.protocol_kinds:
+        checks.append(("xray_tcp_port", "tcp", int(server.xray_tcp_port)))
+        checks.append(("xray_xhttp_port", "tcp", int(server.xray_xhttp_port)))
+    if "awg" in server.protocol_kinds:
+        checks.append(("awg_port", "udp", int(server.awg_port)))
+    if not checks:
+        return 0, "no managed ports to open"
+
+    payload = "\n".join(f"{field}|{proto}|{port}" for field, proto, port in checks)
+    cmd = f"""#!/usr/bin/env bash
+set -euo pipefail
+
+command -v ufw >/dev/null 2>&1 || {{
+  echo "ufw is not installed on this host."
+  exit 1
+}}
+
+cat <<'EOF' >/tmp/vpn-bot-open-ports.txt
+{payload}
+EOF
+
+while IFS='|' read -r field proto port; do
+  [[ -n "$field" ]] || continue
+  ufw allow "$port/$proto" >/dev/null
+  echo "OPENED|$field|$proto|$port"
+done </tmp/vpn-bot-open-ports.txt
+
+rm -f /tmp/vpn-bot-open-ports.txt
+ufw reload >/dev/null 2>&1 || true
+"""
+    rc, out = run_server_command(server, cmd, timeout=60)
+    if rc != 0:
+        return rc, out
+
+    opened: list[str] = []
+    for raw_line in (out or "").splitlines():
+        line = raw_line.strip()
+        if not line.startswith("OPENED|"):
+            continue
+        _, field, proto, port = (line.split("|", 3) + [""])[:4]
+        opened.append(f"- {field}: {port}/{proto}")
+    if not opened:
+        return 0, "Firewall rules updated."
+    return 0, "Opened firewall rules:\n" + "\n".join(opened)
 
 
 def probe_server(server_key: str) -> Tuple[int, str]:
@@ -2046,11 +2343,18 @@ fi
             hit = next((line for line in lines if line.startswith(prefix)), None)
             if hit:
                 summary.append(hit)
+        port_rc, port_out = _check_server_ports(server)
+        if port_out.strip():
+            out = (out.rstrip() + "\n\n" + port_out.strip()).strip()
+        if port_rc != 0:
+            summary.append("ports: conflict")
         if summary:
             try:
                 update_server_fields(server.key, notes="probe: " + " | ".join(summary))
             except Exception:
                 pass
+        if port_rc != 0:
+            return 1, out
     return rc, out
 
 
@@ -2106,6 +2410,11 @@ def bootstrap_server(server_key: str) -> Tuple[int, str]:
     server = get_server(server_key)
     if not server:
         return 1, f"Server {server_key} not found"
+
+    port_rc, port_out = _check_server_ports(server)
+    if port_rc != 0:
+        _mark(server, "bootstrap_failed", port_out[-1500:])
+        return port_rc, port_out
 
     rc, out = run_server_command(server, _packages_script(), timeout=600)
     if rc != 0:
