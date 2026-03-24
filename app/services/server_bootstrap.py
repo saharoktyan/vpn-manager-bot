@@ -2499,13 +2499,20 @@ def bootstrap_server(server_key: str) -> Tuple[int, str]:
             _mark(server, "bootstrap_failed", out[-1500:])
             return rc, out
 
+    completed_parts = ["Base packages and helper scripts installed"]
+    if "xray" in server.protocol_kinds:
+        completed_parts.append("Xray settings generated and runtime deployed")
+    if "awg" in server.protocol_kinds:
+        completed_parts.append("AWG runtime deployed")
+    summary = ". ".join(completed_parts) + "."
+
     _mark(
         server,
         "bootstrapped",
-        "Base packages, helper scripts, generated Xray settings, and AWG container runtime installed.",
+        summary,
     )
     return 0, (
         "Bootstrap completed.\n"
-        "Installed Xray packages, helper scripts, generated server link settings, and AWG Docker runtime.\n"
+        f"{summary}\n"
         "Working node.env was written to /etc/vpn-bot/node.env."
     )

@@ -4,13 +4,14 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from telegram import Update
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import CallbackContext
 
-from config import ADMIN_IDS, APP_VERSION, LIST_PAGE_SIZE, MENU_TITLE, PARSE_MODE
+from config import ADMIN_IDS, APP_VERSION, CB_SRV, LIST_PAGE_SIZE, MENU_TITLE, PARSE_MODE
 from domain.servers import get_access_methods_for_codes
 from i18n import get_locale_for_update, get_user_locale, set_user_locale, t
 from services.app_settings import is_global_telemetry_enabled, set_global_telemetry_enabled
+from services.provisioning_state import summarize_server_provisioning
 from services.server_registry import list_servers
 from services.awg_profiles import list_awg_server_keys
 from services.ssh_keys import render_public_key_guide
@@ -39,33 +40,150 @@ def _render_admin_status(lang: str) -> str:
     servers = list_servers(include_disabled=True)
     subs = subs_store.read()
     users = users_store.read()
-    profiles_total = len([name for name in subs.keys() if not str(name).startswith("_")]) if isinstance(subs, dict) else 0
+    profile_names = [str(name) for name in subs.keys() if not str(name).startswith("_")] if isinstance(subs, dict) else []
+    profiles_total = len(profile_names)
     pending_requests = sum(1 for rec in users.values() if isinstance(rec, dict) and rec.get("access_request_pending"))
+    active_servers = sum(1 for server in servers if server.enabled)
+    active_profiles = 0
+    frozen_profiles = 0
+    expired_profiles = 0
+    for name in profile_names:
+        st = get_subscription_status(name)
+        if st.get("frozen"):
+            frozen_profiles += 1
+        if st.get("active"):
+            active_profiles += 1
+        else:
+            expired_profiles += 1
     lines = [
         t(lang, "admin.status.title"),
         "",
+        t(lang, "admin.status.overview"),
         t(lang, "admin.status.version", version=APP_VERSION),
-        t(lang, "admin.status.servers", count=len(servers)),
-        t(lang, "admin.status.profiles_total", count=profiles_total),
+        t(lang, "admin.status.servers", active=active_servers, total=len(servers)),
+        t(lang, "admin.status.profiles_total", active=active_profiles, total=profiles_total),
         t(lang, "admin.status.requests_pending", count=pending_requests),
         "",
-        t(lang, "admin.status.checklist"),
+        t(lang, "admin.status.health_summary"),
     ]
     if not servers:
         lines.append(t(lang, "admin.status.no_servers"))
     else:
         ready_servers = sum(1 for server in servers if server.bootstrap_state == "bootstrapped")
-        lines.append(t(lang, "admin.status.bootstrap_ready", icon="✅" if ready_servers else "⚠️", ready=ready_servers, total=len(servers)))
+        needs_attention = 0
         xray_ready = 0
         awg_ready = 0
         for server in servers:
-            if "xray" in server.protocol_kinds and get_server_link_status(server.key)[0]:
+            prov = summarize_server_provisioning(server.key)
+            xray_ok = True
+            if "xray" in server.protocol_kinds:
+                xray_ok = get_server_link_status(server.key)[0]
+            awg_ok = ("awg" not in server.protocol_kinds) or server.bootstrap_state == "bootstrapped"
+            if server.bootstrap_state != "bootstrapped" or prov["overall"] in {"failed", "needs_attention"} or not xray_ok or not awg_ok:
+                needs_attention += 1
+            if "xray" in server.protocol_kinds and xray_ok:
                 xray_ready += 1
             if "awg" in server.protocol_kinds and server.bootstrap_state == "bootstrapped":
                 awg_ready += 1
+        lines.append(t(lang, "admin.status.bootstrap_ready", icon="✅" if ready_servers == len(servers) else "⚠️", ready=ready_servers, total=len(servers)))
         lines.append(t(lang, "admin.status.xray_ready", icon="✅" if xray_ready else "⚠️", count=xray_ready))
         lines.append(t(lang, "admin.status.awg_ready", icon="✅" if awg_ready else "⚠️", count=awg_ready))
+        lines.append(t(lang, "admin.status.needs_attention", icon="✅" if needs_attention == 0 else "⚠️", count=needs_attention))
+
+    lines.extend(
+        [
+            "",
+            t(lang, "admin.status.queue"),
+            t(lang, "admin.status.requests_pending_line", count=pending_requests),
+            t(lang, "admin.status.expired_profiles", count=expired_profiles),
+            t(lang, "admin.status.frozen_profiles", count=frozen_profiles),
+        ]
+    )
+
+    action_items: List[str] = []
+    for server in servers:
+        if len(action_items) >= 3:
+            break
+        if not server.enabled:
+            continue
+        if server.bootstrap_state != "bootstrapped":
+            action_items.append(t(lang, "admin.status.action_bootstrap", server=server.key))
+            continue
+        xray_ready, reason = get_server_link_status(server.key) if "xray" in server.protocol_kinds else (True, "ok")
+        if "xray" in server.protocol_kinds and not xray_ready:
+            if "incomplete" in reason:
+                action_items.append(t(lang, "admin.status.action_xray_link", server=server.key))
+            else:
+                action_items.append(t(lang, "admin.status.action_xray_runtime", server=server.key))
+            continue
+        prov = summarize_server_provisioning(server.key)
+        if prov["overall"] in {"failed", "needs_attention"}:
+            action_items.append(t(lang, "admin.status.action_provisioning", server=server.key))
+
+    if action_items or pending_requests:
+        lines.extend(["", t(lang, "admin.status.needs_action")])
+        lines.extend(action_items)
+        if pending_requests and len(action_items) < 3:
+            lines.append(t(lang, "admin.status.action_requests", count=pending_requests))
     return "\n".join(lines)
+
+
+def _problem_server_keys() -> List[str]:
+    keys: List[str] = []
+    for server in list_servers(include_disabled=False):
+        if server.bootstrap_state != "bootstrapped":
+            keys.append(server.key)
+            continue
+        if "xray" in server.protocol_kinds and not get_server_link_status(server.key)[0]:
+            keys.append(server.key)
+            continue
+        prov = summarize_server_provisioning(server.key)
+        if prov["overall"] in {"failed", "needs_attention"}:
+            keys.append(server.key)
+    return keys
+
+
+def _render_problem_servers(lang: str) -> tuple[str, InlineKeyboardMarkup]:
+    rows: List[List[InlineKeyboardButton]] = []
+    keys = _problem_server_keys()
+    if not keys:
+        return (
+            t(lang, "admin.status.problem_servers_empty"),
+            InlineKeyboardMarkup([[InlineKeyboardButton(t(lang, "menu.back"), callback_data="menu:admin_status")]]),
+        )
+    servers = {server.key: server for server in list_servers(include_disabled=False)}
+    lines = [t(lang, "admin.status.problem_servers_title"), ""]
+    for key in keys:
+        server = servers.get(key)
+        if not server:
+            continue
+        reason = t(lang, "admin.status.problem_server_reason_bootstrap")
+        if server.bootstrap_state == "bootstrapped":
+            xray_ready, reason_text = get_server_link_status(server.key) if "xray" in server.protocol_kinds else (True, "ok")
+            if "xray" in server.protocol_kinds and not xray_ready:
+                reason = (
+                    t(lang, "admin.status.problem_server_reason_xray_link")
+                    if "incomplete" in reason_text
+                    else t(lang, "admin.status.problem_server_reason_xray_runtime")
+                )
+            else:
+                prov = summarize_server_provisioning(server.key)
+                if prov["overall"] in {"failed", "needs_attention"}:
+                    reason = t(lang, "admin.status.problem_server_reason_provisioning")
+        lines.append(t(lang, "admin.status.problem_server_line", flag=server.flag, title=server.title, key=server.key, reason=reason))
+        rows.append([InlineKeyboardButton(f"{server.flag} {server.title}", callback_data=f"{CB_SRV}card:{server.key}")])
+    rows.append([InlineKeyboardButton(t(lang, "menu.back"), callback_data="menu:admin_status")])
+    return "\n".join(lines), InlineKeyboardMarkup(rows)
+
+
+def _kb_admin_status(lang: str) -> InlineKeyboardMarkup:
+    rows: List[List[InlineKeyboardButton]] = []
+    if _all_pending_request_ids():
+        rows.append([InlineKeyboardButton(t(lang, "menu.requests"), callback_data="menu:admin_requests")])
+    if _problem_server_keys():
+        rows.append([InlineKeyboardButton(t(lang, "admin.status.problem_servers_button"), callback_data="menu:admin_problem_servers")])
+    rows.append([InlineKeyboardButton(t(lang, "menu.back"), callback_data="menu:admin")])
+    return InlineKeyboardMarkup(rows)
 
 
 def _format_username(value: str, lang: str) -> str:
@@ -769,7 +887,18 @@ def on_menu_callback(update: Update, context: CallbackContext, payload: str) -> 
             update,
             context,
             _render_admin_status(lang),
-            reply_markup=kb_back_to_admin(lang),
+            reply_markup=_kb_admin_status(lang),
+            parse_mode=PARSE_MODE,
+        )
+        return
+
+    if payload == "admin_problem_servers" and is_admin:
+        text, markup = _render_problem_servers(lang)
+        safe_edit_message(
+            update,
+            context,
+            text,
+            reply_markup=markup,
             parse_mode=PARSE_MODE,
         )
         return

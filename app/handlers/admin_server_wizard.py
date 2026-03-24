@@ -206,6 +206,10 @@ def _server_status(server: RegisteredServer, lang: str) -> tuple[str, str]:
 def _xray_status(server: RegisteredServer, lang: str) -> tuple[str, str]:
     if "xray" not in server.protocol_kinds:
         return "—", t(lang, "admin.wizard.server_status_disabled")
+    if server.bootstrap_state != "bootstrapped":
+        if "failed" in server.bootstrap_state:
+            return "⚠️", t(lang, "admin.wizard.server_status_error")
+        return "🛠", t(lang, "admin.wizard.server_status_bootstrap")
     ready, reason = get_server_link_status(server.key)
     if ready:
         return "✅", t(lang, "admin.wizard.server_status_ready")
@@ -280,40 +284,71 @@ def _server_dashboard_markup(servers: Sequence[RegisteredServer], lang: str) -> 
     return InlineKeyboardMarkup(rows)
 
 
+def _advanced_section_for_field(field: str) -> str:
+    if field in {"xray_host", "xray_sni", "xray_fp", "xray_sid"}:
+        return "xray"
+    if field in {"awg_public_host", "awg_iface", "awg_i1_preset"}:
+        return "awg"
+    return "general"
+
+
+def _server_recommended_actions(server: RegisteredServer, lang: str) -> list[str]:
+    items: list[str] = []
+    if not server.enabled:
+        return items
+    if server.bootstrap_state != "bootstrapped":
+        items.append(t(lang, "admin.wizard.server_action_bootstrap"))
+    prov = summarize_server_provisioning(server.key)
+    if prov["overall"] in {"failed", "needs_attention"}:
+        items.append(t(lang, "admin.wizard.server_action_provisioning"))
+    if "xray" in server.protocol_kinds:
+        ready, reason = get_server_link_status(server.key)
+        if not ready:
+            if "incomplete" in reason:
+                items.append(t(lang, "admin.wizard.server_action_xray_link"))
+            else:
+                items.append(t(lang, "admin.wizard.server_action_xray_check"))
+    return items
+
+
 def _server_card_text(server: RegisteredServer, lang: str) -> str:
     server_icon, server_text = _server_status(server, lang)
     xray_icon, xray_text = _xray_status(server, lang)
     awg_icon, awg_text = _awg_status(server, lang)
-    provisioning_text = render_server_provisioning_summary(server.key, lang)
+    overall_icon, overall_text = _server_overall_status(server, lang)
+    prov_summary = summarize_server_provisioning(server.key)
     protocols = ", ".join(server.protocol_kinds) or "—"
+    actions = _server_recommended_actions(server, lang)
     lines = [
         f"🖥 {server.flag} {server.title} ({server.key})",
         "",
-        f"infra: {server_icon} {server_text}",
-        f"transport: {server.transport}",
-        f"ssh_target: {server.ssh_target or '—'}",
-        f"public_host: {server.public_host or '—'}",
-        f"protocols: {protocols}",
+        f"{overall_icon} {overall_text}",
         "",
-        f"xray: {xray_icon} {xray_text}",
-        f"xray_host: {server.xray_host or '—'}",
-        f"xray_sni: {server.xray_sni or '—'}",
-        f"xray_fp: {server.xray_fp or '—'}",
-        f"xray_sid: {server.xray_sid or '—'}",
-        f"xray ports: {server.xray_tcp_port} / {server.xray_xhttp_port}",
+        t(lang, "admin.wizard.server_card_summary"),
+        t(lang, "admin.wizard.server_card_infra", icon=server_icon, status=server_text),
+        t(lang, "admin.wizard.server_card_transport", value=server.transport),
+        t(lang, "admin.wizard.server_card_protocols", value=protocols),
+        t(lang, "admin.wizard.server_card_host", value=server.public_host or "—"),
         "",
-        f"awg: {awg_icon} {awg_text}",
-        f"awg_host: {server.awg_public_host or '—'}",
-        f"awg_port: {server.awg_port}",
-        f"awg_iface: {server.awg_iface}",
-        f"awg_i1_preset: {server.awg_i1_preset}",
+        t(lang, "admin.wizard.server_card_runtime"),
+        t(lang, "admin.wizard.server_card_xray", icon=xray_icon, status=xray_text, tcp=server.xray_tcp_port, xhttp=server.xray_xhttp_port),
+        t(lang, "admin.wizard.server_card_awg", icon=awg_icon, status=awg_text, port=server.awg_port, iface=server.awg_iface),
         "",
-        t(lang, "admin.wizard.server_ports_hint"),
-        "",
-        f"provisioning:\n{provisioning_text}",
+        t(lang, "admin.wizard.server_card_provisioning"),
+        t(
+            lang,
+            "admin.wizard.server_card_provisioning_line",
+            ready=int(prov_summary["by_status"]["provisioned"]),
+            total=int(prov_summary["total"]),
+            failed=int(prov_summary["by_status"]["failed"]),
+            attention=int(prov_summary["by_status"]["needs_attention"]),
+        ),
     ]
+    if actions:
+        lines.extend(["", t(lang, "admin.wizard.server_card_actions")])
+        lines.extend([f"• {item}" for item in actions[:3]])
     if server.notes:
-        lines.extend(["", f"notes: {server.notes}"])
+        lines.extend(["", t(lang, "admin.wizard.server_card_notes"), server.notes])
     return "\n".join(lines)
 
 
@@ -324,6 +359,144 @@ def _server_card_markup(server_key: str, lang: str) -> InlineKeyboardMarkup:
                 InlineKeyboardButton(t(lang, "admin.wizard.probe"), callback_data=f"{CB_SRV}action:probe:{server_key}"),
                 InlineKeyboardButton(t(lang, "admin.wizard.bootstrap"), callback_data=f"{CB_SRV}action:bootstrap:{server_key}"),
             ],
+            [InlineKeyboardButton(t(lang, "admin.wizard.advanced"), callback_data=f"{CB_SRV}advanced:{server_key}")],
+            [InlineKeyboardButton(t(lang, "admin.wizard.to_servers"), callback_data=f"{CB_SRV}list")],
+        ]
+    )
+
+
+def _advanced_menu_text(server: RegisteredServer, lang: str) -> str:
+    return "\n".join(
+        [
+            f"⚙️ {server.flag} {server.title} ({server.key})",
+            "",
+            t(lang, "admin.wizard.advanced_intro"),
+        ]
+    )
+
+
+def _advanced_menu_markup(server_key: str, lang: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton(t(lang, "admin.wizard.advanced_general"), callback_data=f"{CB_SRV}advsection:general:{server_key}"),
+                InlineKeyboardButton(t(lang, "admin.wizard.advanced_xray"), callback_data=f"{CB_SRV}advsection:xray:{server_key}"),
+            ],
+            [
+                InlineKeyboardButton(t(lang, "admin.wizard.advanced_awg"), callback_data=f"{CB_SRV}advsection:awg:{server_key}"),
+                InlineKeyboardButton(t(lang, "admin.wizard.advanced_maintenance"), callback_data=f"{CB_SRV}advsection:maintenance:{server_key}"),
+            ],
+            [InlineKeyboardButton(t(lang, "admin.wizard.back_to_server"), callback_data=f"{CB_SRV}card:{server_key}")],
+        ]
+    )
+
+
+def _advanced_section_text(server: RegisteredServer, section: str, lang: str) -> str:
+    if section == "general":
+        return "\n".join(
+            [
+                f"⚙️ {server.flag} {server.title} ({server.key})",
+                "",
+                t(lang, "admin.wizard.advanced_general"),
+                t(lang, "admin.wizard.advanced_general_title", value=server.title),
+                t(lang, "admin.wizard.advanced_general_flag", value=server.flag),
+                t(lang, "admin.wizard.advanced_general_region", value=server.region),
+                t(lang, "admin.wizard.advanced_general_transport", value=server.transport),
+                t(lang, "admin.wizard.advanced_general_target", value=server.ssh_target or "—"),
+                t(lang, "admin.wizard.advanced_general_host", value=server.public_host or "—"),
+                t(lang, "admin.wizard.advanced_general_protocols", value=", ".join(server.protocol_kinds) or "—"),
+                t(lang, "admin.wizard.advanced_general_ports", tcp=server.xray_tcp_port, xhttp=server.xray_xhttp_port, awg=server.awg_port),
+                t(lang, "admin.wizard.advanced_general_notes", value=server.notes or "—"),
+            ]
+        )
+    if section == "xray":
+        return "\n".join(
+            [
+                f"⚙️ {server.flag} {server.title} ({server.key})",
+                "",
+                t(lang, "admin.wizard.advanced_xray"),
+                t(lang, "admin.wizard.advanced_xray_host_line", value=server.xray_host or "—"),
+                t(lang, "admin.wizard.advanced_xray_sni_line", value=server.xray_sni or "—"),
+                t(lang, "admin.wizard.advanced_xray_fp_line", value=server.xray_fp or "—"),
+                t(lang, "admin.wizard.advanced_xray_sid_line", value=server.xray_sid or "—"),
+            ]
+        )
+    if section == "awg":
+        return "\n".join(
+            [
+                f"⚙️ {server.flag} {server.title} ({server.key})",
+                "",
+                t(lang, "admin.wizard.advanced_awg"),
+                t(lang, "admin.wizard.advanced_awg_host_line", value=server.awg_public_host or "—"),
+                t(lang, "admin.wizard.advanced_awg_iface_line", value=server.awg_iface or "—"),
+                t(lang, "admin.wizard.advanced_awg_preset_line", value=server.awg_i1_preset or "quic"),
+                "",
+                t(lang, "admin.wizard.advanced_awg_note"),
+            ]
+        )
+    return "\n".join(
+        [
+            f"⚙️ {server.flag} {server.title} ({server.key})",
+            "",
+            t(lang, "admin.wizard.advanced_maintenance"),
+            t(lang, "admin.wizard.advanced_maintenance_note"),
+        ]
+    )
+
+
+def _advanced_section_markup(server_key: str, section: str, lang: str) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]]
+    if section == "general":
+        rows = [
+            [
+                InlineKeyboardButton(t(lang, "admin.wizard.field_title"), callback_data=f"{CB_SRV}editfield:title"),
+                InlineKeyboardButton(t(lang, "admin.wizard.field_flag"), callback_data=f"{CB_SRV}editfield:flag"),
+            ],
+            [
+                InlineKeyboardButton(t(lang, "admin.wizard.field_region"), callback_data=f"{CB_SRV}editfield:region"),
+                InlineKeyboardButton(t(lang, "admin.wizard.field_transport"), callback_data=f"{CB_SRV}editfield:transport"),
+            ],
+            [
+                InlineKeyboardButton(t(lang, "admin.wizard.field_target"), callback_data=f"{CB_SRV}editfield:target"),
+                InlineKeyboardButton(t(lang, "admin.wizard.field_public_host"), callback_data=f"{CB_SRV}editfield:public_host"),
+            ],
+            [
+                InlineKeyboardButton(t(lang, "admin.wizard.field_protocols"), callback_data=f"{CB_SRV}editfield:protocols"),
+                InlineKeyboardButton(t(lang, "admin.wizard.field_notes"), callback_data=f"{CB_SRV}editfield:notes"),
+            ],
+        ]
+    elif section == "xray":
+        rows = [
+            [
+                InlineKeyboardButton(t(lang, "admin.wizard.field_xray_host"), callback_data=f"{CB_SRV}editfield:xray_host"),
+                InlineKeyboardButton(t(lang, "admin.wizard.field_xray_sni"), callback_data=f"{CB_SRV}editfield:xray_sni"),
+            ],
+            [
+                InlineKeyboardButton(t(lang, "admin.wizard.field_xray_fp"), callback_data=f"{CB_SRV}editfield:xray_fp"),
+                InlineKeyboardButton(t(lang, "admin.wizard.field_xray_sid"), callback_data=f"{CB_SRV}editfield:xray_sid"),
+            ],
+            [
+                InlineKeyboardButton(t(lang, "admin.wizard.field_xray_tcp_port"), callback_data=f"{CB_SRV}editfield:xray_tcp_port"),
+                InlineKeyboardButton(t(lang, "admin.wizard.field_xray_xhttp_port"), callback_data=f"{CB_SRV}editfield:xray_xhttp_port"),
+            ],
+        ]
+    elif section == "awg":
+        rows = [
+            [
+                InlineKeyboardButton(t(lang, "admin.wizard.field_awg_host"), callback_data=f"{CB_SRV}editfield:awg_public_host"),
+                InlineKeyboardButton(t(lang, "admin.wizard.field_awg_iface"), callback_data=f"{CB_SRV}editfield:awg_iface"),
+            ],
+            [
+                InlineKeyboardButton(t(lang, "admin.wizard.field_awg_port"), callback_data=f"{CB_SRV}editfield:awg_port"),
+                InlineKeyboardButton(t(lang, "admin.wizard.field_awg_preset"), callback_data=f"{CB_SRV}editfield:awg_i1_preset"),
+            ],
+            [
+                InlineKeyboardButton(t(lang, "admin.wizard.awg_entropy"), callback_data=f"{CB_SRV}action:awgentropy:{server_key}"),
+                InlineKeyboardButton(t(lang, "admin.wizard.awg_regen_entropy"), callback_data=f"{CB_SRV}action:awgregen:{server_key}"),
+            ],
+        ]
+    else:
+        rows = [
             [
                 InlineKeyboardButton(t(lang, "admin.wizard.check_ports"), callback_data=f"{CB_SRV}action:checkports:{server_key}"),
                 InlineKeyboardButton(t(lang, "admin.wizard.open_ports"), callback_data=f"{CB_SRV}action:openports:{server_key}"),
@@ -332,84 +505,10 @@ def _server_card_markup(server_key: str, lang: str) -> InlineKeyboardMarkup:
                 InlineKeyboardButton(t(lang, "admin.wizard.sync_env"), callback_data=f"{CB_SRV}action:syncenv:{server_key}"),
                 InlineKeyboardButton(t(lang, "admin.wizard.sync_xray"), callback_data=f"{CB_SRV}action:syncxray:{server_key}"),
             ],
-            [
-                InlineKeyboardButton(t(lang, "admin.wizard.awg_entropy"), callback_data=f"{CB_SRV}action:awgentropy:{server_key}"),
-                InlineKeyboardButton(t(lang, "admin.wizard.awg_regen_entropy"), callback_data=f"{CB_SRV}action:awgregen:{server_key}"),
-            ],
             [InlineKeyboardButton(t(lang, "admin.wizard.reconcile"), callback_data=f"{CB_SRV}action:reconcile:{server_key}")],
-            [InlineKeyboardButton(t(lang, "admin.wizard.edit"), callback_data=f"{CB_SRV}edit:{server_key}")],
-            [InlineKeyboardButton(t(lang, "admin.wizard.to_servers"), callback_data=f"{CB_SRV}list")],
         ]
-    )
-
-
-def _server_edit_menu_text(data: Dict[str, Any], lang: str) -> str:
-    protocols = ", ".join(sorted(data["protocol_kinds"])) or "—"
-    target = data["target"] or "—"
-    public_host = data["public_host"] or "—"
-    notes = data.get("notes") or "—"
-    xray_sni = data.get("xray_sni") or "—"
-    xray_fp = data.get("xray_fp") or "—"
-    awg_i1_preset = data.get("awg_i1_preset") or "quic"
-    if lang == "ru":
-        return (
-            f"✏️ Редактирование сервера `{data['key']}`\n\n"
-            f"title: `{data['title']}`\n"
-            f"flag: `{data['flag']}`\n"
-            f"region: `{data['region']}`\n"
-            f"transport: `{data['transport']}`\n"
-            f"target: `{target}`\n"
-            f"public_host: `{public_host}`\n"
-            f"protocols: `{protocols}`\n"
-            f"xray_sni: `{xray_sni}`\n"
-            f"xray_fp: `{xray_fp}`\n"
-            f"awg_i1_preset: `{awg_i1_preset}`\n"
-            f"notes: `{notes}`\n\n"
-            "Выбери поле для изменения или сохрани изменения."
-        )
-    return (
-        f"✏️ Edit server `{data['key']}`\n\n"
-        f"title: `{data['title']}`\n"
-        f"flag: `{data['flag']}`\n"
-        f"region: `{data['region']}`\n"
-        f"transport: `{data['transport']}`\n"
-        f"target: `{target}`\n"
-        f"public_host: `{public_host}`\n"
-        f"protocols: `{protocols}`\n"
-        f"xray_sni: `{xray_sni}`\n"
-        f"xray_fp: `{xray_fp}`\n"
-        f"awg_i1_preset: `{awg_i1_preset}`\n"
-        f"notes: `{notes}`\n\n"
-        "Choose a field to edit or save the changes."
-    )
-
-
-def _server_edit_menu_markup(server_key: str, lang: str) -> InlineKeyboardMarkup:
-    title = "Название" if lang == "ru" else "Title"
-    flag = "Флаг" if lang == "ru" else "Flag"
-    region = "Регион" if lang == "ru" else "Region"
-    transport = "Transport"
-    target = "Target"
-    public_host = "Public host"
-    protocols = "Протоколы" if lang == "ru" else "Protocols"
-    xray_sni = "Xray dest/SNI"
-    xray_fp = "Xray uTLS fp"
-    awg_preset = "AWG маскировка" if lang == "ru" else "AWG preset"
-    notes = "Заметки" if lang == "ru" else "Notes"
-    save = "💾 Сохранить" if lang == "ru" else "💾 Save"
-    back = "⬅️ К серверу" if lang == "ru" else "⬅️ To Server"
-    return InlineKeyboardMarkup(
-        [
-            [InlineKeyboardButton(title, callback_data=f"{CB_SRV}editfield:title"), InlineKeyboardButton(flag, callback_data=f"{CB_SRV}editfield:flag")],
-            [InlineKeyboardButton(region, callback_data=f"{CB_SRV}editfield:region"), InlineKeyboardButton(transport, callback_data=f"{CB_SRV}editfield:transport")],
-            [InlineKeyboardButton(target, callback_data=f"{CB_SRV}editfield:target"), InlineKeyboardButton(public_host, callback_data=f"{CB_SRV}editfield:public_host")],
-            [InlineKeyboardButton(protocols, callback_data=f"{CB_SRV}editfield:protocols"), InlineKeyboardButton(awg_preset, callback_data=f"{CB_SRV}editfield:awg_i1_preset")],
-            [InlineKeyboardButton(xray_sni, callback_data=f"{CB_SRV}editfield:xray_sni"), InlineKeyboardButton(xray_fp, callback_data=f"{CB_SRV}editfield:xray_fp")],
-            [InlineKeyboardButton(notes, callback_data=f"{CB_SRV}editfield:notes")],
-            [InlineKeyboardButton(save, callback_data=f"{CB_SRV}editsave")],
-            [InlineKeyboardButton(back, callback_data=f"{CB_SRV}card:{server_key}")],
-        ]
-    )
+    rows.append([InlineKeyboardButton(t(lang, "admin.wizard.back_to_advanced"), callback_data=f"{CB_SRV}advanced:{server_key}")])
+    return InlineKeyboardMarkup(rows)
 
 
 def _render_server_card(context: CallbackContext, server_key: str) -> None:
@@ -418,6 +517,36 @@ def _render_server_card(context: CallbackContext, server_key: str) -> None:
         _wizard_edit(context, t(_wizard_lang(context), "admin.wizard.server_not_found"), kb_back_menu(_wizard_lang(context)))
         return
     _wizard_edit(context, _server_card_text(server, _wizard_lang(context)), _server_card_markup(server.key, _wizard_lang(context)))
+
+
+def _open_advanced_menu(context: CallbackContext, server_key: str) -> None:
+    server = get_server(server_key)
+    if not server:
+        _wizard_edit(context, t(_wizard_lang(context), "admin.wizard.server_not_found"), kb_back_menu(_wizard_lang(context)))
+        return
+    w = _wizard_get(context)
+    if w is not None:
+        w["server_key"] = server_key
+        w["data"] = _load_server_into_data(server)
+        w["step"] = "advanced"
+        w["advanced_section"] = None
+        _wizard_set(context, w)
+    _wizard_edit(context, _advanced_menu_text(server, _wizard_lang(context)), _advanced_menu_markup(server_key, _wizard_lang(context)))
+
+
+def _open_advanced_section(context: CallbackContext, server_key: str, section: str) -> None:
+    server = get_server(server_key)
+    if not server:
+        _wizard_edit(context, t(_wizard_lang(context), "admin.wizard.server_not_found"), kb_back_menu(_wizard_lang(context)))
+        return
+    w = _wizard_get(context)
+    if w is not None:
+        w["server_key"] = server_key
+        w["data"] = _load_server_into_data(server)
+        w["step"] = f"advanced_{section}"
+        w["advanced_section"] = section
+        _wizard_set(context, w)
+    _wizard_edit(context, _advanced_section_text(server, section, _wizard_lang(context)), _advanced_section_markup(server_key, section, _wizard_lang(context)))
 
 
 def _action_result_text(title: str, rc: int, out: str, back_key: str) -> str:
@@ -523,9 +652,10 @@ def server_wizard_text(update: Update, context: CallbackContext) -> None:
     if step == "title":
         data["title"] = _keep_current(text, data["title"])
         if w["mode"] == "edit" and w.get("edit_single"):
-            w["step"] = "edit_menu"
+            server_key = str(w.get("server_key") or data["key"])
+            section = str(w.get("advanced_section") or "general")
             _wizard_set(context, w)
-            _wizard_edit(context, _server_edit_menu_text(data, lang), _server_edit_menu_markup(data["key"], lang))
+            _open_advanced_section(context, server_key, section)
             safe_delete_update_message(update, context)
             return
         w["step"] = "flag"
@@ -537,9 +667,10 @@ def server_wizard_text(update: Update, context: CallbackContext) -> None:
     if step == "flag":
         data["flag"] = _keep_current(text, data["flag"])
         if w["mode"] == "edit" and w.get("edit_single"):
-            w["step"] = "edit_menu"
+            server_key = str(w.get("server_key") or data["key"])
+            section = str(w.get("advanced_section") or "general")
             _wizard_set(context, w)
-            _wizard_edit(context, _server_edit_menu_text(data, lang), _server_edit_menu_markup(data["key"], lang))
+            _open_advanced_section(context, server_key, section)
             safe_delete_update_message(update, context)
             return
         w["step"] = "region"
@@ -551,9 +682,10 @@ def server_wizard_text(update: Update, context: CallbackContext) -> None:
     if step == "region":
         data["region"] = _keep_current(text, data["region"])
         if w["mode"] == "edit" and w.get("edit_single"):
-            w["step"] = "edit_menu"
+            server_key = str(w.get("server_key") or data["key"])
+            section = str(w.get("advanced_section") or "general")
             _wizard_set(context, w)
-            _wizard_edit(context, _server_edit_menu_text(data, lang), _server_edit_menu_markup(data["key"], lang))
+            _open_advanced_section(context, server_key, section)
             safe_delete_update_message(update, context)
             return
         w["step"] = "transport"
@@ -565,9 +697,10 @@ def server_wizard_text(update: Update, context: CallbackContext) -> None:
     if step == "target":
         data["target"] = _keep_current(text, data["target"])
         if w["mode"] == "edit" and w.get("edit_single"):
-            w["step"] = "edit_menu"
+            server_key = str(w.get("server_key") or data["key"])
+            section = str(w.get("advanced_section") or "general")
             _wizard_set(context, w)
-            _wizard_edit(context, _server_edit_menu_text(data, lang), _server_edit_menu_markup(data["key"], lang))
+            _open_advanced_section(context, server_key, section)
             safe_delete_update_message(update, context)
             return
         w["step"] = "public_host"
@@ -579,9 +712,10 @@ def server_wizard_text(update: Update, context: CallbackContext) -> None:
     if step == "public_host":
         data["public_host"] = _keep_current(text, data["public_host"])
         if w["mode"] == "edit" and w.get("edit_single"):
-            w["step"] = "edit_menu"
+            server_key = str(w.get("server_key") or data["key"])
+            section = str(w.get("advanced_section") or "general")
             _wizard_set(context, w)
-            _wizard_edit(context, _server_edit_menu_text(data, lang), _server_edit_menu_markup(data["key"], lang))
+            _open_advanced_section(context, server_key, section)
             safe_delete_update_message(update, context)
             return
         w["step"] = "protocols"
@@ -593,25 +727,31 @@ def server_wizard_text(update: Update, context: CallbackContext) -> None:
     if step == "notes":
         data["notes"] = _keep_current(text, data.get("notes", ""))
         if w["mode"] == "edit":
-            w["step"] = "edit_menu"
+            server_key = str(w.get("server_key") or data["key"])
+            section = str(w.get("advanced_section") or "general")
             _wizard_set(context, w)
-            _wizard_edit(context, _server_edit_menu_text(data, lang), _server_edit_menu_markup(data["key"], lang))
+            _open_advanced_section(context, server_key, section)
         safe_delete_update_message(update, context)
         return
 
-    if step == "xray_sni":
-        data["xray_sni"] = _keep_current(text, data.get("xray_sni", ""))
-        w["step"] = "edit_menu"
+    if step in {"xray_host", "xray_sni", "xray_fp", "xray_sid", "awg_public_host", "awg_iface"}:
+        data[step] = _keep_current(text, data.get(step, ""))
+        server_key = str(w.get("server_key") or data["key"])
+        section = str(w.get("advanced_section") or _advanced_section_for_field(step))
+        w["step"] = f"advanced_{section}"
         _wizard_set(context, w)
-        _wizard_edit(context, _server_edit_menu_text(data, lang), _server_edit_menu_markup(data["key"], lang))
+        _open_advanced_section(context, server_key, section)
         safe_delete_update_message(update, context)
         return
 
-    if step == "xray_fp":
-        data["xray_fp"] = _keep_current(text, data.get("xray_fp", "chrome"))
-        w["step"] = "edit_menu"
+    if step in {"xray_tcp_port", "xray_xhttp_port", "awg_port"}:
+        if text != ".":
+            data[step] = int(text)
+        server_key = str(w.get("server_key") or data["key"])
+        section = str(w.get("advanced_section") or "general")
+        w["step"] = f"advanced_{section}"
         _wizard_set(context, w)
-        _wizard_edit(context, _server_edit_menu_text(data, lang), _server_edit_menu_markup(data["key"], lang))
+        _open_advanced_section(context, server_key, section)
         safe_delete_update_message(update, context)
         return
 
@@ -627,8 +767,15 @@ def _load_server_into_data(server: RegisteredServer) -> Dict[str, Any]:
         "public_host": server.public_host or "",
         "notes": server.notes or "",
         "protocol_kinds": set(server.protocol_kinds),
+        "xray_host": server.xray_host or "",
         "xray_sni": server.xray_sni or "",
         "xray_fp": server.xray_fp or "chrome",
+        "xray_sid": server.xray_sid or "",
+        "xray_tcp_port": server.xray_tcp_port,
+        "xray_xhttp_port": server.xray_xhttp_port,
+        "awg_public_host": server.awg_public_host or "",
+        "awg_port": server.awg_port,
+        "awg_iface": server.awg_iface or "wg0",
         "awg_i1_preset": server.awg_i1_preset or "quic",
     }
 
@@ -733,13 +880,23 @@ def on_server_callback(update: Update, context: CallbackContext, payload: str) -
             _wizard_edit(context, t(lang, "admin.wizard.server_choose_protocols"), _protocol_markup(data["protocol_kinds"], lang))
             return
         if step == "notes":
-            w["step"] = "edit_menu"
+            server_key = str(w.get("server_key") or data["key"])
+            section = str(w.get("advanced_section") or "general")
             _wizard_set(context, w)
-            _wizard_edit(context, _server_edit_menu_text(data, lang), _server_edit_menu_markup(data["key"], lang))
+            _open_advanced_section(context, server_key, section)
             return
 
     if payload.startswith("card:"):
         _render_server_card(context, payload.split(":", 1)[1])
+        return
+
+    if payload.startswith("advanced:"):
+        _open_advanced_menu(context, payload.split(":", 1)[1])
+        return
+
+    if payload.startswith("advsection:"):
+        _, section, server_key = payload.split(":", 2)
+        _open_advanced_section(context, server_key, section)
         return
 
     if payload == "back":
@@ -799,9 +956,7 @@ def on_server_callback(update: Update, context: CallbackContext, payload: str) -
                 return
             if w["step"] == "title":
                 if w.get("edit_single"):
-                    w["step"] = "edit_menu"
-                    _wizard_set(context, w)
-                    _wizard_edit(context, _server_edit_menu_text(data, lang), _server_edit_menu_markup(data["key"], lang))
+                    _open_advanced_section(context, str(w.get("server_key") or data["key"]), str(w.get("advanced_section") or "general"))
                 elif w.get("server_key"):
                     _render_server_card(context, str(w["server_key"]))
                 else:
@@ -810,9 +965,7 @@ def on_server_callback(update: Update, context: CallbackContext, payload: str) -
                 return
             if w["step"] == "flag":
                 if w.get("edit_single"):
-                    w["step"] = "edit_menu"
-                    _wizard_set(context, w)
-                    _wizard_edit(context, _server_edit_menu_text(data, lang), _server_edit_menu_markup(data["key"], lang))
+                    _open_advanced_section(context, str(w.get("server_key") or data["key"]), str(w.get("advanced_section") or "general"))
                 else:
                     w["step"] = "title"
                     _wizard_set(context, w)
@@ -820,9 +973,7 @@ def on_server_callback(update: Update, context: CallbackContext, payload: str) -
                 return
             if w["step"] == "region":
                 if w.get("edit_single"):
-                    w["step"] = "edit_menu"
-                    _wizard_set(context, w)
-                    _wizard_edit(context, _server_edit_menu_text(data, lang), _server_edit_menu_markup(data["key"], lang))
+                    _open_advanced_section(context, str(w.get("server_key") or data["key"]), str(w.get("advanced_section") or "general"))
                 else:
                     w["step"] = "flag"
                     _wizard_set(context, w)
@@ -830,9 +981,7 @@ def on_server_callback(update: Update, context: CallbackContext, payload: str) -
                 return
             if w["step"] == "transport":
                 if w.get("edit_single"):
-                    w["step"] = "edit_menu"
-                    _wizard_set(context, w)
-                    _wizard_edit(context, _server_edit_menu_text(data, lang), _server_edit_menu_markup(data["key"], lang))
+                    _open_advanced_section(context, str(w.get("server_key") or data["key"]), str(w.get("advanced_section") or "general"))
                 else:
                     w["step"] = "region"
                     _wizard_set(context, w)
@@ -840,9 +989,7 @@ def on_server_callback(update: Update, context: CallbackContext, payload: str) -
                 return
             if w["step"] == "target":
                 if w.get("edit_single"):
-                    w["step"] = "edit_menu"
-                    _wizard_set(context, w)
-                    _wizard_edit(context, _server_edit_menu_text(data, lang), _server_edit_menu_markup(data["key"], lang))
+                    _open_advanced_section(context, str(w.get("server_key") or data["key"]), str(w.get("advanced_section") or "general"))
                 else:
                     w["step"] = "transport"
                     _wizard_set(context, w)
@@ -850,9 +997,7 @@ def on_server_callback(update: Update, context: CallbackContext, payload: str) -
                 return
             if w["step"] == "public_host":
                 if w.get("edit_single"):
-                    w["step"] = "edit_menu"
-                    _wizard_set(context, w)
-                    _wizard_edit(context, _server_edit_menu_text(data, lang), _server_edit_menu_markup(data["key"], lang))
+                    _open_advanced_section(context, str(w.get("server_key") or data["key"]), str(w.get("advanced_section") or "general"))
                 else:
                     if data["transport"] == "local":
                         w["step"] = "transport"
@@ -865,18 +1010,16 @@ def on_server_callback(update: Update, context: CallbackContext, payload: str) -
                 return
             if w["step"] == "protocols":
                 if w.get("edit_single"):
-                    w["step"] = "edit_menu"
-                    _wizard_set(context, w)
-                    _wizard_edit(context, _server_edit_menu_text(data, lang), _server_edit_menu_markup(data["key"], lang))
+                    _open_advanced_section(context, str(w.get("server_key") or data["key"]), str(w.get("advanced_section") or "general"))
                 else:
                     w["step"] = "public_host"
                     _wizard_set(context, w)
                     _render_step_prompt(context, lang, "public_host", data)
                 return
-            if w["step"] in {"notes", "xray_sni", "xray_fp", "awg_i1_preset"}:
-                w["step"] = "edit_menu"
-                _wizard_set(context, w)
-                _wizard_edit(context, _server_edit_menu_text(data, lang), _server_edit_menu_markup(data["key"], lang))
+            if w["step"] in {"notes", "xray_host", "xray_sni", "xray_fp", "xray_sid", "xray_tcp_port", "xray_xhttp_port", "awg_public_host", "awg_port", "awg_iface", "awg_i1_preset"}:
+                section = str(w.get("advanced_section") or _advanced_section_for_field(str(w["step"])))
+                server_key = str(w.get("server_key") or data["key"])
+                _open_advanced_section(context, server_key, section)
                 return
         return
 
@@ -909,18 +1052,7 @@ def on_server_callback(update: Update, context: CallbackContext, payload: str) -
         return
 
     if payload.startswith("edit:"):
-        server_key = payload.split(":", 1)[1]
-        server = get_server(server_key)
-        if not server:
-            _wizard_edit(context, t(lang, "admin.wizard.server_not_found"), kb_back_menu(lang))
-            return
-        w["mode"] = "edit"
-        w["server_key"] = server_key
-        w["data"] = _load_server_into_data(server)
-        w["step"] = "edit_menu"
-        w["edit_single"] = False
-        _wizard_set(context, w)
-        _wizard_edit(context, _server_edit_menu_text(w["data"], lang), _server_edit_menu_markup(server_key, lang))
+        _open_advanced_menu(context, payload.split(":", 1)[1])
         return
 
     if payload.startswith("pick:"):
@@ -931,13 +1063,9 @@ def on_server_callback(update: Update, context: CallbackContext, payload: str) -
             return
         w["server_key"] = server_key
         w["data"] = _load_server_into_data(server)
-        w["step"] = "title"
+        w["step"] = "advanced"
         _wizard_set(context, w)
-        _wizard_edit(
-            context,
-            t(lang, "admin.wizard.server_edit", server=_md(server_key), title=_md(server.title)),
-            _step_nav_markup(lang, next_payload=f"{CB_SRV}next"),
-        )
+        _open_advanced_menu(context, server_key)
         return
 
     if payload.startswith("action:"):
@@ -982,9 +1110,10 @@ def on_server_callback(update: Update, context: CallbackContext, payload: str) -
     if payload.startswith("transport:"):
         data["transport"] = payload.split(":", 1)[1]
         if w["mode"] == "edit" and w.get("edit_single"):
-            w["step"] = "edit_menu"
+            server_key = str(w.get("server_key") or data["key"])
+            section = str(w.get("advanced_section") or "general")
             _wizard_set(context, w)
-            _wizard_edit(context, _server_edit_menu_text(data, lang), _server_edit_menu_markup(data["key"], lang))
+            _open_advanced_section(context, server_key, section)
             return
         w["step"] = "target"
         _wizard_set(context, w)
@@ -1009,9 +1138,10 @@ def on_server_callback(update: Update, context: CallbackContext, payload: str) -
                 _wizard_edit(context, t(lang, "admin.wizard.server_protocol_required"), _protocol_markup(selected, lang))
                 return
             if w["mode"] == "edit" and w.get("edit_single"):
-                w["step"] = "edit_menu"
+                server_key = str(w.get("server_key") or data["key"])
+                section = str(w.get("advanced_section") or "general")
                 _wizard_set(context, w)
-                _wizard_edit(context, _server_edit_menu_text(data, lang), _server_edit_menu_markup(data["key"], lang))
+                _open_advanced_section(context, server_key, section)
             else:
                 _wizard_edit(context, _summary_text(data, editing=w["mode"] == "edit", lang=lang), _summary_markup(lang))
             return
@@ -1025,15 +1155,18 @@ def on_server_callback(update: Update, context: CallbackContext, payload: str) -
 
     if payload.startswith("awgpreset:"):
         data["awg_i1_preset"] = payload.split(":", 1)[1]
-        w["step"] = "edit_menu"
+        server_key = str(w.get("server_key") or data["key"])
+        w["step"] = "advanced_awg"
+        w["advanced_section"] = "awg"
         _wizard_set(context, w)
-        _wizard_edit(context, _server_edit_menu_text(data, lang), _server_edit_menu_markup(data["key"], lang))
+        _open_advanced_section(context, server_key, "awg")
         return
 
     if payload.startswith("editfield:"):
         field = payload.split(":", 1)[1]
         w["mode"] = "edit"
         w["edit_single"] = True
+        w["advanced_section"] = _advanced_section_for_field(field)
         if field == "transport":
             w["step"] = "transport"
             _wizard_set(context, w)
@@ -1047,7 +1180,7 @@ def on_server_callback(update: Update, context: CallbackContext, payload: str) -
         if field == "awg_i1_preset":
             w["step"] = "awg_i1_preset"
             _wizard_set(context, w)
-            prompt = "Выбери AWG preset для I1." if lang == "ru" else "Choose the AWG preset for I1."
+            prompt = t(lang, "admin.wizard.awg_preset_prompt")
             _wizard_edit(context, prompt, _awg_preset_markup(lang))
             return
         if field == "notes":
@@ -1062,8 +1195,15 @@ def on_server_callback(update: Update, context: CallbackContext, payload: str) -
             "region": t(lang, "admin.wizard.server_create_region"),
             "target": t(lang, "admin.wizard.server_enter_target"),
             "public_host": t(lang, "admin.wizard.server_enter_public_host"),
+            "xray_host": t(lang, "admin.wizard.prompt_xray_host"),
             "xray_sni": "Введи Xray dest/SNI. Например: `www.cloudflare.com`" if lang == "ru" else "Enter Xray dest/SNI. Example: `www.cloudflare.com`",
             "xray_fp": "Введи Xray uTLS fingerprint. Например: `chrome`" if lang == "ru" else "Enter the Xray uTLS fingerprint. Example: `chrome`",
+            "xray_sid": t(lang, "admin.wizard.prompt_xray_sid"),
+            "xray_tcp_port": t(lang, "admin.wizard.prompt_xray_tcp_port"),
+            "xray_xhttp_port": t(lang, "admin.wizard.prompt_xray_xhttp_port"),
+            "awg_public_host": t(lang, "admin.wizard.prompt_awg_host"),
+            "awg_port": t(lang, "admin.wizard.prompt_awg_port"),
+            "awg_iface": t(lang, "admin.wizard.prompt_awg_iface"),
         }
         if field in field_prompts:
             w["step"] = field
@@ -1072,6 +1212,27 @@ def on_server_callback(update: Update, context: CallbackContext, payload: str) -
             return
 
     if payload == "editsave":
+        current = get_server(data["key"])
+        if not current:
+            _wizard_edit(context, t(lang, "admin.wizard.server_not_found"), kb_back_menu(lang))
+            return
+        runtime_edited = any(
+            [
+                current.transport != data["transport"],
+                (current.public_host or "") != (data["public_host"] or (data["target"].split("@")[-1] if data["target"] else "")),
+                (current.ssh_host or "") != (data["target"] or ""),
+                tuple(current.protocol_kinds) != tuple(sorted(data["protocol_kinds"])),
+                current.xray_host != (data.get("xray_host") or ""),
+                current.xray_sni != (data.get("xray_sni") or ""),
+                current.xray_sid != (data.get("xray_sid") or ""),
+                current.xray_fp != (data.get("xray_fp") or "chrome"),
+                current.xray_tcp_port != int(data.get("xray_tcp_port") or 443),
+                current.xray_xhttp_port != int(data.get("xray_xhttp_port") or 8443),
+                current.awg_public_host != (data.get("awg_public_host") or ""),
+                current.awg_port != int(data.get("awg_port") or 51820),
+                current.awg_iface != (data.get("awg_iface") or "wg0"),
+            ]
+        )
         server = update_server_fields(
             data["key"],
             title=data["title"],
@@ -1081,18 +1242,26 @@ def on_server_callback(update: Update, context: CallbackContext, payload: str) -
             public_host=data["public_host"] or (data["target"].split("@")[-1] if data["target"] else ""),
             ssh_host=data["target"] or None,
             protocol_kinds=sorted(data["protocol_kinds"]),
+            xray_host=data.get("xray_host") or "",
             xray_sni=data.get("xray_sni") or "",
+            xray_sid=data.get("xray_sid") or "",
+            xray_short_id=data.get("xray_sid") or "",
             xray_fp=data.get("xray_fp") or "chrome",
+            xray_tcp_port=int(data.get("xray_tcp_port") or 443),
+            xray_xhttp_port=int(data.get("xray_xhttp_port") or 8443),
             notes=data.get("notes") or "",
+            awg_public_host=data.get("awg_public_host") or "",
+            awg_port=int(data.get("awg_port") or 51820),
+            awg_iface=data.get("awg_iface") or "wg0",
             awg_i1_preset=data.get("awg_i1_preset") or "quic",
-            bootstrap_state="edited",
+            bootstrap_state="edited" if runtime_edited else current.bootstrap_state,
         )
         w["data"] = _load_server_into_data(server)
         w["edit_single"] = False
-        w["step"] = "edit_menu"
+        w["step"] = "advanced"
         _wizard_set(context, w)
-        saved = "✅ Изменения сохранены." if lang == "ru" else "✅ Changes saved."
-        _wizard_edit(context, f"{saved}\n\n{_server_edit_menu_text(w['data'], lang)}", _server_edit_menu_markup(server.key, lang))
+        saved = t(lang, "admin.wizard.server_saved_inline")
+        _wizard_edit(context, f"{saved}\n\n{_advanced_menu_text(server, lang)}", _advanced_menu_markup(server.key, lang))
         return
 
     if payload == "save":
@@ -1191,7 +1360,6 @@ def setserverfield_cmd(update: Update, context: CallbackContext) -> None:
         "awg_iface",
         "awg_public_host",
         "awg_port",
-        "awg_i1_preset",
     }
     if field in int_fields:
         value_obj: object = int(value)
