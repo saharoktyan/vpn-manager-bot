@@ -171,10 +171,7 @@ def _resolve_profile_name(user_id: int | None) -> str | None:
     if not isinstance(rec, dict):
         return None
     profile_name = str(rec.get("profile_name") or "").strip()
-    if profile_name:
-        return profile_name
-    username = str(rec.get("username") or "").strip().lstrip("@")
-    return username or None
+    return profile_name or None
 
 
 def start_cmd(update: Update, context: CallbackContext) -> None:
@@ -187,13 +184,18 @@ def start_cmd(update: Update, context: CallbackContext) -> None:
         rec = db.get(str(user.id))
         if not isinstance(rec, dict):
             rec = {}
+        profile_name = str(rec.get("profile_name") or "").strip()
+        if not profile_name:
+            candidate = str(user.username or "").strip().lstrip("@")
+            if candidate and get_profile(candidate):
+                profile_name = candidate
         rec.update(
             {
                 "chat_id": chat.id,
                 "username": user.username or "",
                 "first_name": user.first_name or "",
                 "last_name": user.last_name or "",
-                "profile_name": rec.get("profile_name"),
+                "profile_name": profile_name or rec.get("profile_name"),
                 "locale": rec.get("locale") or detect_locale(update),
                 "updated_at": datetime.utcnow().isoformat(timespec="seconds") + "Z",
                 "notify_access_requests": bool(rec.get("notify_access_requests", True)),

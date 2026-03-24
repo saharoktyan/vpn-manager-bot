@@ -693,6 +693,8 @@ def _finish_create(context: CallbackContext) -> None:
     uuid_val: Optional[str] = None
     xray_short_id: Optional[str] = None
     xray_methods = [method for method in get_access_methods_for_codes(protocols) if method.protocol_kind == "xray"]
+    existing_xray = rec.get("xray") if isinstance(rec.get("xray"), dict) else {}
+    server_short_ids = dict(existing_xray.get("server_short_ids") or {}) if isinstance(existing_xray, dict) else {}
     for method in xray_methods:
         code, out, ensured_uuid, ensured_short_id = xray_svc.ensure_user(name, method.server_key, uuid_value=uuid_val)
         if code != 0 or not ensured_uuid:
@@ -702,6 +704,7 @@ def _finish_create(context: CallbackContext) -> None:
         uuid_val = ensured_uuid
         if ensured_short_id:
             xray_short_id = ensured_short_id
+            server_short_ids[method.server_key] = ensured_short_id
         ready, reason = xray_svc.get_server_link_status(method.server_key)
         if ready:
             xray_state_updates.append(("provisioned", method.server_key, ensured_uuid, None))
@@ -724,7 +727,13 @@ def _finish_create(context: CallbackContext) -> None:
     rec["protocols"] = sorted(protocols)
     if uuid_val:
         rec["uuid"] = uuid_val
-        rec["xray"] = {"enabled": True, "transports": ["xhttp", "tcp"], "default": "xhttp", "short_id": xray_short_id or ""}
+        rec["xray"] = {
+            "enabled": True,
+            "transports": ["xhttp", "tcp"],
+            "default": "xhttp",
+            "short_id": xray_short_id or "",
+            "server_short_ids": server_short_ids,
+        }
     subs[name] = rec
     subs_store.write(subs)
     for status, server_key, remote_id, last_error in xray_state_updates:
@@ -789,6 +798,11 @@ def _save_edit(context: CallbackContext) -> None:
 
     subs = subs_store.read()
     rec = subs.get(name, {}) if isinstance(subs.get(name, {}), dict) else {}
+    existing_protocols = set()
+    raw_existing_protocols = rec.get("protocols")
+    if isinstance(raw_existing_protocols, list):
+        existing_protocols = {str(code) for code in raw_existing_protocols if get_access_method(str(code))}
+
     now = utcnow()
     if sub_days is None:
         rec.update({"type": "none", "expires_at": None, "created_at": rec.get("created_at") or now.isoformat(timespec="minutes")})
@@ -798,11 +812,6 @@ def _save_edit(context: CallbackContext) -> None:
 
     rec["protocols"] = sorted(protocols)
 
-    existing_protocols = set()
-    raw_existing_protocols = rec.get("protocols")
-    if isinstance(raw_existing_protocols, list):
-        existing_protocols = {str(code) for code in raw_existing_protocols if get_access_method(str(code))}
-
     selected_xray_methods = [method for method in get_access_methods_for_codes(protocols) if method.protocol_kind == "xray"]
     existing_xray_methods = [method for method in get_access_methods_for_codes(existing_protocols) if method.protocol_kind == "xray"]
     selected_xray_server_keys = {method.server_key for method in selected_xray_methods}
@@ -810,6 +819,8 @@ def _save_edit(context: CallbackContext) -> None:
 
     uuid_val = rec.get("uuid") if isinstance(rec, dict) else None
     xray_short_id = None
+    existing_xray = rec.get("xray") if isinstance(rec.get("xray"), dict) else {}
+    server_short_ids = dict(existing_xray.get("server_short_ids") or {}) if isinstance(existing_xray, dict) else {}
     for method in selected_xray_methods:
         code, out, ensured_uuid, ensured_short_id = xray_svc.ensure_user(name, method.server_key, uuid_value=uuid_val)
         if code != 0 or not ensured_uuid:
@@ -826,6 +837,7 @@ def _save_edit(context: CallbackContext) -> None:
         uuid_val = ensured_uuid
         if ensured_short_id:
             xray_short_id = ensured_short_id
+            server_short_ids[method.server_key] = ensured_short_id
         ready, reason = xray_svc.get_server_link_status(method.server_key)
         if ready:
             upsert_profile_server_state(
@@ -849,8 +861,16 @@ def _save_edit(context: CallbackContext) -> None:
             errors.append(f"{method.label}: профиль есть, но сервер не готов к выдаче ссылки\n{reason}")
 
     if uuid_val:
+        for removed_server_key in existing_xray_server_keys - selected_xray_server_keys:
+            server_short_ids.pop(removed_server_key, None)
         rec["uuid"] = uuid_val
-        rec["xray"] = {"enabled": True, "transports": ["xhttp", "tcp"], "default": "xhttp", "short_id": xray_short_id or xray_svc.get_short_id_local(name) or ""}
+        rec["xray"] = {
+            "enabled": True,
+            "transports": ["xhttp", "tcp"],
+            "default": "xhttp",
+            "short_id": xray_short_id or xray_svc.get_short_id_local(name) or "",
+            "server_short_ids": server_short_ids,
+        }
         ensure_xray_caps(name, uuid_val)
 
     for server_key in sorted(existing_xray_server_keys - selected_xray_server_keys):

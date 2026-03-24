@@ -18,10 +18,16 @@ log = logging.getLogger("server_runtime")
 
 
 def _ssh_control_path(server: RegisteredServer) -> str:
+    control_dir = "/tmp/vpn-manager-bot-ssh"
+    os.makedirs(control_dir, mode=0o700, exist_ok=True)
+    try:
+        os.chmod(control_dir, 0o700)
+    except Exception:
+        pass
     target = server.ssh_target or server.key
     raw = f"{server.key}:{target}:{server.ssh_port or 22}:{server.ssh_key_path or ''}"
     digest = hashlib.sha1(raw.encode("utf-8")).hexdigest()[:20]
-    return f"/tmp/vpn-manager-bot-ssh-{digest}"
+    return os.path.join(control_dir, digest)
 
 
 def is_running_in_container() -> bool:

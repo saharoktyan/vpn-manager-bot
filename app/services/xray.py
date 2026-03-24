@@ -54,12 +54,18 @@ def get_uuid_local(name: str) -> Optional[str]:
     return str(uuid_val) if isinstance(uuid_val, str) and uuid_val.strip() else None
 
 
-def get_short_id_local(name: str) -> Optional[str]:
+def get_short_id_local(name: str, server_key: Optional[str] = None) -> Optional[str]:
     from services.subscriptions import get_profile
 
     rec = get_profile(name)
     xray = rec.get("xray") if isinstance(rec, dict) else None
     if isinstance(xray, dict):
+        if server_key:
+            server_short_ids = xray.get("server_short_ids")
+            if isinstance(server_short_ids, dict):
+                short_id = server_short_ids.get(server_key)
+                if isinstance(short_id, str) and short_id.strip():
+                    return short_id.strip()
         short_id = xray.get("short_id")
         if isinstance(short_id, str) and short_id.strip():
             return short_id.strip()
@@ -207,7 +213,7 @@ def get_uuid_by_name(name: str, server_key: Optional[str] = None) -> Optional[st
 
 def ensure_user(name: str, server_key: str, uuid_value: Optional[str] = None) -> Tuple[int, str, Optional[str], Optional[str]]:
     uuid_value = uuid_value or get_uuid_local(name) or str(uuid_lib.uuid4())
-    short_id = get_short_id_local(name) or generate_short_id()
+    short_id = get_short_id_local(name, server_key) or generate_short_id()
     code, out = add_user(name, server_key=server_key, uuid_value=uuid_value, short_id=short_id)
     if code != 0:
         lower_out = (out or "").lower()
@@ -237,7 +243,7 @@ def build_vless_link_transport(name: str, uuid: str, transport: str, server_key:
     if not ready:
         raise ValueError(reason)
 
-    short_id = get_short_id_local(name) or server.xray_short_id or server.xray_sid
+    short_id = get_short_id_local(name, server_key) or server.xray_short_id or server.xray_sid
     path_prefix = server.xray_xhttp_path_prefix or "/assets"
 
     if transport == "xhttp":

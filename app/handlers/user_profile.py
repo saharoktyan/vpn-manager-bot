@@ -245,11 +245,17 @@ def _set_admin_flag(user_id: int, **fields: Any) -> None:
 def _ensure_profile_for_request(user_id: int) -> str:
     users = users_store.read()
     rec = users.get(str(user_id)) if isinstance(users, dict) else None
+    existing_profile_name = str(rec.get("profile_name") or "").strip() if isinstance(rec, dict) else ""
+    if existing_profile_name and get_profile(existing_profile_name):
+        return existing_profile_name
     username = str(rec.get("username") or "").strip() if isinstance(rec, dict) else ""
     candidate = username or f"tg_{user_id}"
-    existing = get_profile(candidate)
-    if existing:
-        return candidate
+    if username and get_profile(candidate):
+        candidate = f"tg_{user_id}"
+    suffix = 1
+    while get_profile(candidate):
+        candidate = f"tg_{user_id}_{suffix}"
+        suffix += 1
 
     now = utcnow().isoformat(timespec="minutes")
 

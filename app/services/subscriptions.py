@@ -183,7 +183,7 @@ def ensure_xray_caps(name: str, uuid_val: str) -> None:
     subs_store.update(mut)
 
 
-def set_xray_short_id(name: str, short_id: str) -> None:
+def set_xray_short_id(name: str, short_id: str, server_key: str | None = None) -> None:
     def mut(s: Dict[str, Any]) -> Dict[str, Any]:
         rec = s.get(name)
         if not isinstance(rec, dict):
@@ -191,7 +191,14 @@ def set_xray_short_id(name: str, short_id: str) -> None:
         x = rec.get("xray")
         if not isinstance(x, dict):
             x = {}
-        x["short_id"] = short_id
+        if server_key:
+            mapping = x.get("server_short_ids")
+            if not isinstance(mapping, dict):
+                mapping = {}
+            mapping[str(server_key)] = short_id
+            x["server_short_ids"] = mapping
+        else:
+            x["short_id"] = short_id
         rec["xray"] = x
         s[name] = rec
         return s

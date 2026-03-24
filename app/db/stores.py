@@ -1,8 +1,44 @@
 from __future__ import annotations
 
+import json
 from typing import Any, Callable, Dict, List
 
 from db.sqlite_db import SQLiteDB
+
+
+def _decode_xray_short_id(value: Any) -> tuple[str, Dict[str, str]]:
+    raw = str(value or "").strip()
+    if not raw:
+        return "", {}
+    if raw.startswith("{"):
+        try:
+            data = json.loads(raw)
+        except Exception:
+            return raw, {}
+        if isinstance(data, dict):
+            mapping = {
+                str(server_key): str(short_id).strip()
+                for server_key, short_id in data.items()
+                if str(server_key).strip() and str(short_id).strip()
+            }
+            return "", mapping
+    return raw, {}
+
+
+def _encode_xray_short_id(xray: Dict[str, Any] | None) -> str | None:
+    if not isinstance(xray, dict):
+        return None
+    mapping = xray.get("server_short_ids")
+    if isinstance(mapping, dict):
+        normalized = {
+            str(server_key): str(short_id).strip()
+            for server_key, short_id in mapping.items()
+            if str(server_key).strip() and str(short_id).strip()
+        }
+        if normalized:
+            return json.dumps(normalized, ensure_ascii=False, sort_keys=True)
+    short_id = str(xray.get("short_id") or "").strip()
+    return short_id or None
 
 
 class SQLiteSubscriptionsStore:
@@ -45,6 +81,7 @@ class SQLiteSubscriptionsStore:
                     "updated_at": row["updated_at"],
                 }
                 if row["uuid"] is not None:
+                    short_id, server_short_ids = _decode_xray_short_id(row["short_id"])
                     transports = [
                         str(item["transport"])
                         for item in conn.execute(
@@ -56,7 +93,8 @@ class SQLiteSubscriptionsStore:
                     rec["xray"] = {
                         "enabled": bool(row["xray_enabled"]) if row["xray_enabled"] is not None else True,
                         "transports": transports or ["tcp", "xhttp"],
-                        "short_id": row["short_id"] or "",
+                        "short_id": short_id,
+                        "server_short_ids": server_short_ids,
                         "default": row["default_transport"] or "xhttp",
                     }
                 access_codes = [
@@ -139,7 +177,7 @@ class SQLiteSubscriptionsStore:
                             transports = [str(item) for item in raw_transports]
                         default_transport = str(xray.get("default") or default_transport)
                         enabled = bool(xray.get("enabled", True))
-                        short_id = xray.get("short_id")
+                        short_id = _encode_xray_short_id(xray)
                     conn.execute(
                         """
                         INSERT INTO xray_profiles(profile_name, uuid, enabled, short_id, default_transport)

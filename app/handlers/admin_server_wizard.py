@@ -467,7 +467,10 @@ def _render_step_prompt(context: CallbackContext, lang: str, step: str, data: Di
         else t(lang, "admin.wizard.server_enter_public_host"),
         "notes": "Введи заметки для сервера или `.` чтобы оставить как есть." if lang == "ru" else "Enter server notes or `.` to keep the current value.",
     }
-    _wizard_edit(context, prompts[step], _step_nav_markup(lang, show_back=True, next_payload=f"{CB_SRV}next"))
+    next_payload = f"{CB_SRV}next"
+    if step in {"notes", "xray_sni", "xray_fp"}:
+        next_payload = None
+    _wizard_edit(context, prompts[step], _step_nav_markup(lang, show_back=True, next_payload=next_payload))
 
 
 def serverwizard_cmd(update: Update, context: CallbackContext) -> None:
@@ -580,6 +583,22 @@ def server_wizard_text(update: Update, context: CallbackContext) -> None:
             w["step"] = "edit_menu"
             _wizard_set(context, w)
             _wizard_edit(context, _server_edit_menu_text(data, lang), _server_edit_menu_markup(data["key"], lang))
+        safe_delete_update_message(update, context)
+        return
+
+    if step == "xray_sni":
+        data["xray_sni"] = _keep_current(text, data.get("xray_sni", ""))
+        w["step"] = "edit_menu"
+        _wizard_set(context, w)
+        _wizard_edit(context, _server_edit_menu_text(data, lang), _server_edit_menu_markup(data["key"], lang))
+        safe_delete_update_message(update, context)
+        return
+
+    if step == "xray_fp":
+        data["xray_fp"] = _keep_current(text, data.get("xray_fp", "chrome"))
+        w["step"] = "edit_menu"
+        _wizard_set(context, w)
+        _wizard_edit(context, _server_edit_menu_text(data, lang), _server_edit_menu_markup(data["key"], lang))
         safe_delete_update_message(update, context)
         return
 
@@ -841,7 +860,7 @@ def on_server_callback(update: Update, context: CallbackContext, payload: str) -
                     _wizard_set(context, w)
                     _render_step_prompt(context, lang, "public_host", data)
                 return
-            if w["step"] == "notes":
+            if w["step"] in {"notes", "xray_sni", "xray_fp", "awg_i1_preset"}:
                 w["step"] = "edit_menu"
                 _wizard_set(context, w)
                 _wizard_edit(context, _server_edit_menu_text(data, lang), _server_edit_menu_markup(data["key"], lang))

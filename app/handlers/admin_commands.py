@@ -45,7 +45,7 @@ def add_cmd(update: Update, context: CallbackContext) -> None:
     if ensured_short_id:
         from services.subscriptions import set_xray_short_id
 
-        set_xray_short_id(name, ensured_short_id)
+        set_xray_short_id(name, ensured_short_id, server_key=default_server_key)
     update.effective_message.reply_text(
         t(lang, "admin.cmd.ready_name_uuid", name=name, uuid=ensured_uuid),
         parse_mode=PARSE_MODE,
