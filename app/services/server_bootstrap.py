@@ -1803,7 +1803,9 @@ CFG="${AWG_CONFIG_FILE:-/opt/amnezia/awg/wg0.conf}"
 NETWORK="${AWG_NETWORK:-10.8.1.0/24}"
 GO_IMPL="${WG_QUICK_USERSPACE_IMPLEMENTATION:-amneziawg-go}"
 GO_PID=""
-PUB_IFACE="$(ip route get 1.1.1.1 | awk '/dev/ {for (i=1;i<=NF;i++) if ($i==\"dev\") {print $(i+1); exit}}')"
+PUB_IFACE="$(ip route get 1.1.1.1 2>/dev/null | awk '/dev/ {for (i=1;i<=NF;i++) if ($i==\"dev\") {print $(i+1); exit}}' || true)"
+
+echo "AWG runtime starting: iface=$IFACE cfg=$CFG network=$NETWORK"
 
 require_cmd() {
   command -v "$1" >/dev/null 2>&1 || {
@@ -1945,6 +1947,8 @@ fi
 ip link set mtu "$MTU" up dev "$IFACE"
 
 setup_nat
+
+echo "AWG runtime ready: iface=$IFACE pub_iface=${PUB_IFACE:-none}"
 
 tail -f /dev/null
 EOF
