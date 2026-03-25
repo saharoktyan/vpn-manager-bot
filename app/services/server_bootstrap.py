@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import shlex
 from typing import Tuple
 
 from services.server_registry import RegisteredServer, get_server, update_server_fields
@@ -1971,6 +1972,47 @@ def _mark(server: RegisteredServer, state: str, notes: str = "") -> None:
     update_server_fields(server.key, bootstrap_state=state, notes=notes)
 
 
+def _remote_file_exists(server: RegisteredServer, path: str) -> bool:
+    rc, _ = run_server_command(server, f"test -f {shlex.quote(path)}", timeout=30)
+    return rc == 0
+
+
+def _cleanup_server_runtime(server: RegisteredServer, preserve_config: bool) -> Tuple[int, str]:
+    preserve = "1" if preserve_config else "0"
+    script = f"""#!/usr/bin/env bash
+set -euo pipefail
+
+docker_rm() {{
+  local name="$1"
+  if command -v docker >/dev/null 2>&1; then
+    docker rm -f "$name" >/dev/null 2>&1 || true
+    return
+  fi
+  if command -v sudo >/dev/null 2>&1 && sudo docker info >/dev/null 2>&1; then
+    sudo docker rm -f "$name" >/dev/null 2>&1 || true
+  fi
+}}
+
+XRAY_CONTAINER="xray"
+AWG_CONTAINER="{AWG_RUNTIME_CONTAINER}"
+if [[ -f /etc/vpn-bot/node.env ]]; then
+  source /etc/vpn-bot/node.env
+fi
+
+docker_rm "${{XRAY_CONTAINER_NAME:-$XRAY_CONTAINER}}"
+docker_rm "${{AWG_CONTAINER_NAME:-$AWG_CONTAINER}}"
+
+if [[ "{preserve}" != "1" ]]; then
+  rm -f /etc/vpn-bot/node.env
+  rm -rf /opt/vpn-manager-node
+  echo "Managed runtime removed with config files."
+else
+  echo "Managed runtime removed. Existing config files were preserved."
+fi
+"""
+    return run_server_command(server, script, timeout=180)
+
+
 def render_server_node_env(server: RegisteredServer) -> str:
     return (
         f"XRAY_CONFIG={server.xray_config_path}\n"
@@ -2406,7 +2448,7 @@ def regenerate_awg_entropy(server_key: str) -> Tuple[int, str]:
     return run_server_command(server, "/opt/vpn-manager-node/regenerate-awg-entropy.sh", timeout=180)
 
 
-def bootstrap_server(server_key: str) -> Tuple[int, str]:
+def bootstrap_server(server_key: str, preserve_config: bool = False) -> Tuple[int, str]:
     server = get_server(server_key)
     if not server:
         return 1, f"Server {server_key} not found"
@@ -2453,47 +2495,56 @@ def bootstrap_server(server_key: str) -> Tuple[int, str]:
         _mark(server, "bootstrap_failed", node_env_out[-1500:])
         return node_env_rc, node_env_out
 
+    reused_xray_config = False
+    reused_awg_config = False
+
     if "xray" in server.protocol_kinds:
         sni_host = server.xray_sni or "www.cloudflare.com"
-        rc, out = run_server_command(
-            server,
-            " ".join(
-                [
-                    "/opt/vpn-manager-node/init-xray.sh",
-                    server.xray_config_path,
-                    server.public_host,
-                    sni_host,
-                    str(server.xray_tcp_port),
-                    str(server.xray_xhttp_port),
-                    server.xray_xhttp_path_prefix,
-                    server.xray_flow,
-                    "ghcr.io/xtls/xray-core:25.12.8",
-                ]
-            ),
-            timeout=180,
-        )
-        if rc != 0:
-            _mark(server, "bootstrap_failed", out[-1500:])
-            return rc, out
-        try:
-            generated = _extract_last_json_object(out)
-        except Exception:
-            _mark(server, "bootstrap_failed", out[-1500:])
-            return 1, f"Could not parse generated Xray settings:\n{out[-1500:]}"
-        if not generated.get("xray_pbk"):
-            _mark(server, "bootstrap_failed", out[-1500:])
-            return 1, f"Generated Xray settings are incomplete:\n{out[-1500:]}"
-        update_server_fields(server.key, **generated)
+        if preserve_config and _remote_file_exists(server, server.xray_config_path):
+            reused_xray_config = True
+        else:
+            rc, out = run_server_command(
+                server,
+                " ".join(
+                    [
+                        "/opt/vpn-manager-node/init-xray.sh",
+                        server.xray_config_path,
+                        server.public_host,
+                        sni_host,
+                        str(server.xray_tcp_port),
+                        str(server.xray_xhttp_port),
+                        server.xray_xhttp_path_prefix,
+                        server.xray_flow,
+                        "ghcr.io/xtls/xray-core:25.12.8",
+                    ]
+                ),
+                timeout=180,
+            )
+            if rc != 0:
+                _mark(server, "bootstrap_failed", out[-1500:])
+                return rc, out
+            try:
+                generated = _extract_last_json_object(out)
+            except Exception:
+                _mark(server, "bootstrap_failed", out[-1500:])
+                return 1, f"Could not parse generated Xray settings:\n{out[-1500:]}"
+            if not generated.get("xray_pbk"):
+                _mark(server, "bootstrap_failed", out[-1500:])
+                return 1, f"Generated Xray settings are incomplete:\n{out[-1500:]}"
+            update_server_fields(server.key, **generated)
         rc, out = run_server_command(server, "/opt/vpn-manager-node/deploy-xray.sh", timeout=300)
         if rc != 0:
             _mark(server, "bootstrap_failed", out[-1500:])
             return rc, out
 
     if "awg" in server.protocol_kinds:
-        rc, out = run_server_command(server, "/opt/vpn-manager-node/init-awg.sh", timeout=120)
-        if rc != 0:
-            _mark(server, "bootstrap_failed", out[-1500:])
-            return rc, out
+        if preserve_config and _remote_file_exists(server, server.awg_config_path):
+            reused_awg_config = True
+        else:
+            rc, out = run_server_command(server, "/opt/vpn-manager-node/init-awg.sh", timeout=120)
+            if rc != 0:
+                _mark(server, "bootstrap_failed", out[-1500:])
+                return rc, out
         rc, out = run_server_command(server, "/opt/vpn-manager-node/deploy-awg.sh", timeout=900)
         if rc != 0:
             _mark(server, "bootstrap_failed", out[-1500:])
@@ -2501,9 +2552,15 @@ def bootstrap_server(server_key: str) -> Tuple[int, str]:
 
     completed_parts = ["Base packages and helper scripts installed"]
     if "xray" in server.protocol_kinds:
-        completed_parts.append("Xray settings generated and runtime deployed")
+        if reused_xray_config:
+            completed_parts.append("Xray config preserved and runtime redeployed")
+        else:
+            completed_parts.append("Xray settings generated and runtime deployed")
     if "awg" in server.protocol_kinds:
-        completed_parts.append("AWG runtime deployed")
+        if reused_awg_config:
+            completed_parts.append("AWG config preserved and runtime redeployed")
+        else:
+            completed_parts.append("AWG runtime deployed")
     summary = ". ".join(completed_parts) + "."
 
     _mark(
@@ -2516,3 +2573,44 @@ def bootstrap_server(server_key: str) -> Tuple[int, str]:
         f"{summary}\n"
         "Working node.env was written to /etc/vpn-bot/node.env."
     )
+
+
+def reinstall_server(server_key: str, preserve_config: bool = True) -> Tuple[int, str]:
+    server = get_server(server_key)
+    if not server:
+        return 1, f"Server {server_key} not found"
+
+    prefix = "Reinstall mode: preserving existing config.\n\n" if preserve_config else "Reinstall mode: clean reinstall.\n\n"
+    if not preserve_config:
+        rc, out = _cleanup_server_runtime(server, preserve_config=False)
+        if rc != 0:
+            _mark(server, "bootstrap_failed", out[-1500:])
+            return rc, out
+    rc, out = bootstrap_server(server_key, preserve_config=preserve_config)
+    return rc, prefix + out
+
+
+def delete_server_runtime(server_key: str, preserve_config: bool = True) -> Tuple[int, str]:
+    server = get_server(server_key)
+    if not server:
+        return 1, f"Server {server_key} not found"
+
+    rc, out = _cleanup_server_runtime(server, preserve_config=preserve_config)
+    if rc != 0:
+        _mark(server, "bootstrap_failed", out[-1500:])
+        return rc, out
+
+    updates = {
+        "bootstrap_state": "edited" if preserve_config else "new",
+        "notes": "runtime removed; config preserved" if preserve_config else "runtime removed; config wiped",
+    }
+    if not preserve_config:
+        updates.update(
+            {
+                "xray_pbk": "",
+                "xray_short_id": "",
+            }
+        )
+    update_server_fields(server.key, **updates)
+    suffix = "Existing config files were preserved." if preserve_config else "Config files and runtime directories were removed."
+    return 0, f"Runtime removed.\n{suffix}"

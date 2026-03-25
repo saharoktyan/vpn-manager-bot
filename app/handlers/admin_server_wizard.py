@@ -16,9 +16,11 @@ from services.provisioning_state import (
 from services.server_bootstrap import (
     bootstrap_server,
     check_server_ports,
+    delete_server_runtime,
     open_server_ports,
     probe_server,
     regenerate_awg_entropy,
+    reinstall_server,
     show_awg_entropy,
     sync_server_node_env,
     sync_xray_server_settings,
@@ -167,7 +169,7 @@ def _protocol_markup(selected: Set[str], lang: str) -> InlineKeyboardMarkup:
             [InlineKeyboardButton(mark("awg", "AWG"), callback_data=f"{CB_SRV}protocol:awg")],
             [
                 InlineKeyboardButton(t(lang, "menu.back"), callback_data=f"{CB_SRV}back"),
-                InlineKeyboardButton("✅ Далее" if lang == "ru" else "✅ Next", callback_data=f"{CB_SRV}protocol:done"),
+                InlineKeyboardButton(t(lang, "admin.wizard.next"), callback_data=f"{CB_SRV}protocol:done"),
             ],
         ]
     )
@@ -285,7 +287,7 @@ def _server_dashboard_markup(servers: Sequence[RegisteredServer], lang: str) -> 
 
 
 def _advanced_section_for_field(field: str) -> str:
-    if field in {"xray_host", "xray_sni", "xray_fp", "xray_sid"}:
+    if field in {"xray_host", "xray_sni", "xray_fp"}:
         return "xray"
     if field in {"awg_public_host", "awg_iface", "awg_i1_preset"}:
         return "awg"
@@ -357,10 +359,73 @@ def _server_card_markup(server_key: str, lang: str) -> InlineKeyboardMarkup:
         [
             [
                 InlineKeyboardButton(t(lang, "admin.wizard.probe"), callback_data=f"{CB_SRV}action:probe:{server_key}"),
-                InlineKeyboardButton(t(lang, "admin.wizard.bootstrap"), callback_data=f"{CB_SRV}action:bootstrap:{server_key}"),
+                InlineKeyboardButton(t(lang, "admin.wizard.bootstrap"), callback_data=f"{CB_SRV}bootmenu:{server_key}"),
             ],
             [InlineKeyboardButton(t(lang, "admin.wizard.advanced"), callback_data=f"{CB_SRV}advanced:{server_key}")],
             [InlineKeyboardButton(t(lang, "admin.wizard.to_servers"), callback_data=f"{CB_SRV}list")],
+        ]
+    )
+
+
+def _bootstrap_menu_text(server: RegisteredServer, lang: str) -> str:
+    return "\n".join(
+        [
+            f"🛠 {server.flag} {server.title} ({server.key})",
+            "",
+            t(lang, "admin.wizard.bootstrap_menu_title"),
+            t(
+                lang,
+                "admin.wizard.bootstrap_menu_state",
+                state=t(lang, "admin.wizard.server_status_ready")
+                if server.bootstrap_state == "bootstrapped"
+                else t(lang, "admin.wizard.server_status_bootstrap"),
+            ),
+            "",
+            t(lang, "admin.wizard.bootstrap_menu_intro"),
+        ]
+    )
+
+
+def _bootstrap_menu_markup(server: RegisteredServer, lang: str) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]]
+    if server.bootstrap_state == "bootstrapped":
+        rows = [
+            [
+                InlineKeyboardButton(t(lang, "admin.wizard.reinstall"), callback_data=f"{CB_SRV}bootmode:reinstall:{server.key}"),
+                InlineKeyboardButton(t(lang, "admin.wizard.delete_runtime"), callback_data=f"{CB_SRV}bootmode:delete:{server.key}"),
+            ],
+        ]
+    else:
+        rows = [
+            [InlineKeyboardButton(t(lang, "admin.wizard.bootstrap"), callback_data=f"{CB_SRV}bootmode:bootstrap:{server.key}")],
+        ]
+    rows.append([InlineKeyboardButton(t(lang, "admin.wizard.back_to_server"), callback_data=f"{CB_SRV}card:{server.key}")])
+    return InlineKeyboardMarkup(rows)
+
+
+def _bootstrap_mode_text(server: RegisteredServer, action: str, lang: str) -> str:
+    action_key = {
+        "bootstrap": "admin.wizard.bootstrap",
+        "reinstall": "admin.wizard.reinstall",
+        "delete": "admin.wizard.delete_runtime",
+    }[action]
+    return "\n".join(
+        [
+            f"🛠 {server.flag} {server.title} ({server.key})",
+            "",
+            t(lang, "admin.wizard.bootstrap_mode_title", action=t(lang, action_key)),
+            t(lang, "admin.wizard.bootstrap_mode_intro"),
+        ]
+    )
+
+
+def _bootstrap_mode_markup(server_key: str, action: str, lang: str) -> InlineKeyboardMarkup:
+    clean_key = "admin.wizard.clean_remove" if action == "delete" else "admin.wizard.clean_reinstall"
+    return InlineKeyboardMarkup(
+        [
+            [InlineKeyboardButton(t(lang, "admin.wizard.keep_config"), callback_data=f"{CB_SRV}bootrun:{action}:preserve:{server_key}")],
+            [InlineKeyboardButton(t(lang, clean_key), callback_data=f"{CB_SRV}bootrun:{action}:clean:{server_key}")],
+            [InlineKeyboardButton(t(lang, "admin.wizard.back_to_bootstrap"), callback_data=f"{CB_SRV}bootmenu:{server_key}")],
         ]
     )
 
@@ -418,7 +483,6 @@ def _advanced_section_text(server: RegisteredServer, section: str, lang: str) ->
                 t(lang, "admin.wizard.advanced_xray_host_line", value=server.xray_host or "—"),
                 t(lang, "admin.wizard.advanced_xray_sni_line", value=server.xray_sni or "—"),
                 t(lang, "admin.wizard.advanced_xray_fp_line", value=server.xray_fp or "—"),
-                t(lang, "admin.wizard.advanced_xray_sid_line", value=server.xray_sid or "—"),
             ]
         )
     if section == "awg":
@@ -473,7 +537,6 @@ def _advanced_section_markup(server_key: str, section: str, lang: str) -> Inline
             ],
             [
                 InlineKeyboardButton(t(lang, "admin.wizard.field_xray_fp"), callback_data=f"{CB_SRV}editfield:xray_fp"),
-                InlineKeyboardButton(t(lang, "admin.wizard.field_xray_sid"), callback_data=f"{CB_SRV}editfield:xray_sid"),
             ],
             [
                 InlineKeyboardButton(t(lang, "admin.wizard.field_xray_tcp_port"), callback_data=f"{CB_SRV}editfield:xray_tcp_port"),
@@ -532,6 +595,32 @@ def _open_advanced_menu(context: CallbackContext, server_key: str) -> None:
         w["advanced_section"] = None
         _wizard_set(context, w)
     _wizard_edit(context, _advanced_menu_text(server, _wizard_lang(context)), _advanced_menu_markup(server_key, _wizard_lang(context)))
+
+
+def _open_bootstrap_menu(context: CallbackContext, server_key: str) -> None:
+    server = get_server(server_key)
+    if not server:
+        _wizard_edit(context, t(_wizard_lang(context), "admin.wizard.server_not_found"), kb_back_menu(_wizard_lang(context)))
+        return
+    w = _wizard_get(context)
+    if w is not None:
+        w["server_key"] = server_key
+        w["step"] = "bootstrap_menu"
+        _wizard_set(context, w)
+    _wizard_edit(context, _bootstrap_menu_text(server, _wizard_lang(context)), _bootstrap_menu_markup(server, _wizard_lang(context)))
+
+
+def _open_bootstrap_mode(context: CallbackContext, server_key: str, action: str) -> None:
+    server = get_server(server_key)
+    if not server:
+        _wizard_edit(context, t(_wizard_lang(context), "admin.wizard.server_not_found"), kb_back_menu(_wizard_lang(context)))
+        return
+    w = _wizard_get(context)
+    if w is not None:
+        w["server_key"] = server_key
+        w["step"] = f"bootstrap_mode_{action}"
+        _wizard_set(context, w)
+    _wizard_edit(context, _bootstrap_mode_text(server, action, _wizard_lang(context)), _bootstrap_mode_markup(server_key, action, _wizard_lang(context)))
 
 
 def _open_advanced_section(context: CallbackContext, server_key: str, section: str) -> None:
@@ -734,7 +823,7 @@ def server_wizard_text(update: Update, context: CallbackContext) -> None:
         safe_delete_update_message(update, context)
         return
 
-    if step in {"xray_host", "xray_sni", "xray_fp", "xray_sid", "awg_public_host", "awg_iface"}:
+    if step in {"xray_host", "xray_sni", "xray_fp", "awg_public_host", "awg_iface"}:
         data[step] = _keep_current(text, data.get(step, ""))
         server_key = str(w.get("server_key") or data["key"])
         section = str(w.get("advanced_section") or _advanced_section_for_field(step))
@@ -770,7 +859,6 @@ def _load_server_into_data(server: RegisteredServer) -> Dict[str, Any]:
         "xray_host": server.xray_host or "",
         "xray_sni": server.xray_sni or "",
         "xray_fp": server.xray_fp or "chrome",
-        "xray_sid": server.xray_sid or "",
         "xray_tcp_port": server.xray_tcp_port,
         "xray_xhttp_port": server.xray_xhttp_port,
         "awg_public_host": server.awg_public_host or "",
@@ -1016,7 +1104,7 @@ def on_server_callback(update: Update, context: CallbackContext, payload: str) -
                     _wizard_set(context, w)
                     _render_step_prompt(context, lang, "public_host", data)
                 return
-            if w["step"] in {"notes", "xray_host", "xray_sni", "xray_fp", "xray_sid", "xray_tcp_port", "xray_xhttp_port", "awg_public_host", "awg_port", "awg_iface", "awg_i1_preset"}:
+            if w["step"] in {"notes", "xray_host", "xray_sni", "xray_fp", "xray_tcp_port", "xray_xhttp_port", "awg_public_host", "awg_port", "awg_iface", "awg_i1_preset"}:
                 section = str(w.get("advanced_section") or _advanced_section_for_field(str(w["step"])))
                 server_key = str(w.get("server_key") or data["key"])
                 _open_advanced_section(context, server_key, section)
@@ -1068,15 +1156,36 @@ def on_server_callback(update: Update, context: CallbackContext, payload: str) -
         _open_advanced_menu(context, server_key)
         return
 
+    if payload.startswith("bootmenu:"):
+        _open_bootstrap_menu(context, payload.split(":", 1)[1])
+        return
+
+    if payload.startswith("bootmode:"):
+        _, action, server_key = payload.split(":", 2)
+        _open_bootstrap_mode(context, server_key, action)
+        return
+
+    if payload.startswith("bootrun:"):
+        _, action, mode, server_key = payload.split(":", 3)
+        preserve_config = mode == "preserve"
+        if action == "bootstrap":
+            rc, out = bootstrap_server(server_key, preserve_config=preserve_config)
+            _wizard_edit(context, _action_result_text(t(lang, "admin.wizard.bootstrap"), rc, out, server_key), _server_card_markup(server_key, lang))
+            return
+        if action == "reinstall":
+            rc, out = reinstall_server(server_key, preserve_config=preserve_config)
+            _wizard_edit(context, _action_result_text(t(lang, "admin.wizard.reinstall"), rc, out, server_key), _server_card_markup(server_key, lang))
+            return
+        if action == "delete":
+            rc, out = delete_server_runtime(server_key, preserve_config=preserve_config)
+            _wizard_edit(context, _action_result_text(t(lang, "admin.wizard.delete_runtime"), rc, out, server_key), _server_card_markup(server_key, lang))
+            return
+
     if payload.startswith("action:"):
         _, action, server_key = payload.split(":", 2)
         if action == "probe":
             rc, out = probe_server(server_key)
             _wizard_edit(context, _action_result_text(t(lang, "admin.wizard.probe"), rc, out, server_key), _server_card_markup(server_key, lang))
-            return
-        if action == "bootstrap":
-            rc, out = bootstrap_server(server_key)
-            _wizard_edit(context, _action_result_text(t(lang, "admin.wizard.bootstrap"), rc, out, server_key), _server_card_markup(server_key, lang))
             return
         if action == "checkports":
             rc, out = check_server_ports(server_key)
@@ -1198,7 +1307,6 @@ def on_server_callback(update: Update, context: CallbackContext, payload: str) -
             "xray_host": t(lang, "admin.wizard.prompt_xray_host"),
             "xray_sni": "Введи Xray dest/SNI. Например: `www.cloudflare.com`" if lang == "ru" else "Enter Xray dest/SNI. Example: `www.cloudflare.com`",
             "xray_fp": "Введи Xray uTLS fingerprint. Например: `chrome`" if lang == "ru" else "Enter the Xray uTLS fingerprint. Example: `chrome`",
-            "xray_sid": t(lang, "admin.wizard.prompt_xray_sid"),
             "xray_tcp_port": t(lang, "admin.wizard.prompt_xray_tcp_port"),
             "xray_xhttp_port": t(lang, "admin.wizard.prompt_xray_xhttp_port"),
             "awg_public_host": t(lang, "admin.wizard.prompt_awg_host"),
@@ -1224,7 +1332,6 @@ def on_server_callback(update: Update, context: CallbackContext, payload: str) -
                 tuple(current.protocol_kinds) != tuple(sorted(data["protocol_kinds"])),
                 current.xray_host != (data.get("xray_host") or ""),
                 current.xray_sni != (data.get("xray_sni") or ""),
-                current.xray_sid != (data.get("xray_sid") or ""),
                 current.xray_fp != (data.get("xray_fp") or "chrome"),
                 current.xray_tcp_port != int(data.get("xray_tcp_port") or 443),
                 current.xray_xhttp_port != int(data.get("xray_xhttp_port") or 8443),
@@ -1244,8 +1351,6 @@ def on_server_callback(update: Update, context: CallbackContext, payload: str) -
             protocol_kinds=sorted(data["protocol_kinds"]),
             xray_host=data.get("xray_host") or "",
             xray_sni=data.get("xray_sni") or "",
-            xray_sid=data.get("xray_sid") or "",
-            xray_short_id=data.get("xray_sid") or "",
             xray_fp=data.get("xray_fp") or "chrome",
             xray_tcp_port=int(data.get("xray_tcp_port") or 443),
             xray_xhttp_port=int(data.get("xray_xhttp_port") or 8443),
@@ -1349,7 +1454,6 @@ def setserverfield_cmd(update: Update, context: CallbackContext) -> None:
         "xray_host",
         "xray_sni",
         "xray_pbk",
-        "xray_sid",
         "xray_short_id",
         "xray_fp",
         "xray_flow",
