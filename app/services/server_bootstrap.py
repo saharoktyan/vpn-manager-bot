@@ -1797,6 +1797,7 @@ RUN mkdir -p /opt/amnezia
 RUN cat > /opt/amnezia/start.sh <<'EOF'
 #!/bin/bash
 set -euo pipefail
+set -x
 
 IFACE="${AWG_IFACE:-wg0}"
 CFG="${AWG_CONFIG_FILE:-/opt/amnezia/awg/wg0.conf}"
@@ -1984,7 +1985,7 @@ RUN echo -e " \\n\\
   * hard nofile 51200 \\n\\
   " | sed -e 's/^\\s\\+//g' | tee -a /etc/security/limits.conf
 
-ENTRYPOINT [ "dumb-init", "bash", "/opt/amnezia/start.sh" ]
+ENTRYPOINT [ "/bin/bash", "-x", "/opt/amnezia/start.sh" ]
 CMD [ "" ]
 """
 
