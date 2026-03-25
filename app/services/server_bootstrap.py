@@ -1790,14 +1790,10 @@ AWG_DOCKERFILE = """FROM amneziavpn/amneziawg-go:latest
 
 LABEL maintainer="AmneziaVPN"
 
-RUN apk add --no-cache bash curl dumb-init python3
-RUN apk --update upgrade --no-cache
-
 RUN mkdir -p /opt/amnezia
 RUN cat > /opt/amnezia/start.sh <<'EOF'
-#!/bin/bash
-set -euo pipefail
-set -x
+#!/bin/sh
+set -eu
 
 IFACE="${AWG_IFACE:-wg0}"
 CFG="${AWG_CONFIG_FILE:-/opt/amnezia/awg/wg0.conf}"
@@ -1816,72 +1812,48 @@ require_cmd() {
 }
 
 conf_value() {
-  local key="$1"
+  key="$1"
   awk -F' = ' -v key="$key" '$1 == key {print $2; exit}' "$CFG"
 }
 
 strip_conf() {
-  python3 - "$CFG" <<'PY'
-import sys
-
-cfg = sys.argv[1]
-allowed_interface = {
-    "PrivateKey",
-    "ListenPort",
-    "FwMark",
-    "Jc",
-    "Jmin",
-    "Jmax",
-    "S1",
-    "S2",
-    "S3",
-    "S4",
-    "H1",
-    "H2",
-    "H3",
-    "H4",
-    "I1",
-    "I2",
-    "I3",
-    "I4",
-    "I5",
-}
-allowed_peer = {
-    "PublicKey",
-    "PresharedKey",
-    "AllowedIPs",
-    "Endpoint",
-    "PersistentKeepalive",
-}
-
-section = None
-with open(cfg, "r", encoding="utf-8", errors="ignore") as fh:
-    for raw in fh:
-        line = raw.rstrip(chr(10))
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#"):
-            continue
-        if stripped == "[Interface]":
-            section = "interface"
-            print("[Interface]")
-            continue
-        if stripped == "[Peer]":
-            section = "peer"
-            print("")
-            print("[Peer]")
-            continue
-        if " = " not in stripped or section is None:
-            continue
-        key, _ = stripped.split(" = ", 1)
-        if section == "interface" and key in allowed_interface:
-            print(stripped)
-        elif section == "peer" and key in allowed_peer:
-            print(stripped)
-PY
+  awk '
+    function keep_interface(key) {
+      return key == "PrivateKey" || key == "ListenPort" || key == "FwMark" || key == "Jc" || key == "Jmin" || key == "Jmax" || key == "S1" || key == "S2" || key == "S3" || key == "S4" || key == "H1" || key == "H2" || key == "H3" || key == "H4" || key == "I1" || key == "I2" || key == "I3" || key == "I4" || key == "I5"
+    }
+    function keep_peer(key) {
+      return key == "PublicKey" || key == "PresharedKey" || key == "AllowedIPs" || key == "Endpoint" || key == "PersistentKeepalive"
+    }
+    {
+      line=$0
+      gsub(/\r$/, "", line)
+      trimmed=line
+      sub(/^[ \t]+/, "", trimmed)
+      sub(/[ \t]+$/, "", trimmed)
+      if (trimmed == "" || trimmed ~ /^#/) next
+      if (trimmed == "[Interface]") {
+        section="interface"
+        print "[Interface]"
+        next
+      }
+      if (trimmed == "[Peer]") {
+        section="peer"
+        print ""
+        print "[Peer]"
+        next
+      }
+      if (index(trimmed, " = ") == 0 || section == "") next
+      split(trimmed, parts, " = ")
+      key=parts[1]
+      if ((section == "interface" && keep_interface(key)) || (section == "peer" && keep_peer(key))) {
+        print trimmed
+      }
+    }
+  ' "$CFG"
 }
 
 setup_nat() {
-  if [[ -n "$PUB_IFACE" ]]; then
+  if [ -n "$PUB_IFACE" ]; then
     iptables -C FORWARD -i "$IFACE" -j ACCEPT >/dev/null 2>&1 || iptables -A FORWARD -i "$IFACE" -j ACCEPT
     iptables -C FORWARD -o "$IFACE" -j ACCEPT >/dev/null 2>&1 || iptables -A FORWARD -o "$IFACE" -j ACCEPT
     iptables -t nat -C POSTROUTING -s "$NETWORK" -o "$PUB_IFACE" -j MASQUERADE >/dev/null 2>&1 || \
@@ -1890,7 +1862,7 @@ setup_nat() {
 }
 
 cleanup_nat() {
-  if [[ -n "$PUB_IFACE" ]]; then
+  if [ -n "$PUB_IFACE" ]; then
     iptables -D FORWARD -i "$IFACE" -j ACCEPT >/dev/null 2>&1 || true
     iptables -D FORWARD -o "$IFACE" -j ACCEPT >/dev/null 2>&1 || true
     iptables -t nat -D POSTROUTING -s "$NETWORK" -o "$PUB_IFACE" -j MASQUERADE >/dev/null 2>&1 || true
@@ -1900,7 +1872,7 @@ cleanup_nat() {
 cleanup() {
   cleanup_nat
   ip link del "$IFACE" >/dev/null 2>&1 || true
-  if [[ -n "$GO_PID" ]]; then
+  if [ -n "$GO_PID" ]; then
     kill "$GO_PID" >/dev/null 2>&1 || true
     wait "$GO_PID" >/dev/null 2>&1 || true
   fi
@@ -1908,19 +1880,20 @@ cleanup() {
 
 trap cleanup EXIT INT TERM
 
-if [[ ! -f "$CFG" ]]; then
+if [ ! -f "$CFG" ]; then
   echo "Config not found: $CFG"
-  tail -f /dev/null
+  exec sh -c 'while :; do sleep 3600; done'
   exit 0
 fi
 
 require_cmd "$GO_IMPL"
 require_cmd wg
 require_cmd ip
+require_cmd awk
 
 ADDR="$(conf_value "Address")"
 MTU="$(conf_value "MTU")"
-[[ -n "$MTU" ]] || MTU="1280"
+[ -n "$MTU" ] || MTU="1280"
 
 sysctl -w net.ipv4.ip_forward=1 >/dev/null 2>&1 || true
 ip link del "$IFACE" >/dev/null 2>&1 || true
@@ -1942,7 +1915,7 @@ fi
 
 strip_conf | wg setconf "$IFACE" /dev/stdin
 
-if [[ -n "$ADDR" ]]; then
+if [ -n "$ADDR" ]; then
   ip address add "$ADDR" dev "$IFACE"
 fi
 ip link set mtu "$MTU" up dev "$IFACE"
@@ -1985,7 +1958,7 @@ RUN echo -e " \\n\\
   * hard nofile 51200 \\n\\
   " | sed -e 's/^\\s\\+//g' | tee -a /etc/security/limits.conf
 
-ENTRYPOINT [ "/bin/bash", "-x", "/opt/amnezia/start.sh" ]
+ENTRYPOINT [ "/bin/sh", "/opt/amnezia/start.sh" ]
 CMD [ "" ]
 """
 
