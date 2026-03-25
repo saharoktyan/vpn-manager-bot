@@ -2010,6 +2010,13 @@ fi
 mkdir -p "$DOCKER_DIR/data"
 docker_cmd build --no-cache -t "$IMAGE" "$DOCKER_DIR"
 
+if ! docker_cmd run --rm --entrypoint /bin/sh "$IMAGE" -n /opt/amnezia/start.sh >/tmp/awg-syntax.out 2>/tmp/awg-syntax.err; then
+  echo "AWG image syntax check failed." >&2
+  cat /tmp/awg-syntax.out >&2 || true
+  cat /tmp/awg-syntax.err >&2 || true
+  exit 1
+fi
+
 if docker_cmd ps -a --format '{{.Names}}' | grep -q "^${CONTAINER}$"; then
   docker_cmd rm -f "$CONTAINER" >/dev/null
 fi
@@ -2037,6 +2044,17 @@ if [[ "$STATE" != "running" ]]; then
   echo "host_arch: $(uname -m 2>/dev/null || echo unknown)" >&2
   docker_cmd image inspect "$IMAGE" -f 'image_os={{.Os}} image_arch={{.Architecture}}' >&2 || true
   docker_cmd logs "$CONTAINER" >&2 || true
+  echo "manual_run_output:" >&2
+  docker_cmd run --rm \
+    --cap-add NET_ADMIN \
+    --device /dev/net/tun:/dev/net/tun \
+    --sysctl net.ipv4.ip_forward=1 \
+    -e AWG_IFACE="$IFACE" \
+    -e AWG_CONFIG_FILE="/opt/amnezia/awg/$(basename "$CFG")" \
+    -e AWG_NETWORK="${AWG_NETWORK:-10.8.1.0/24}" \
+    -e AWG_LISTEN_PORT="$PORT" \
+    -v "$DOCKER_DIR/data:/opt/amnezia/awg" \
+    "$IMAGE" >&2 || true
   exit 1
 fi
 
