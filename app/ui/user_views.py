@@ -51,7 +51,7 @@ def render_getkey_overview(methods: List[AccessMethod], lang: str = "ru") -> tup
 def render_server_menu(server_key: str, methods: List[AccessMethod], lang: str = "ru") -> tuple[str, List[tuple[str, str]]]:
     server = get_server(server_key)
     items = [(method.getkey_payload, method.short_label.split(" ", 1)[1]) for method in methods]
-    text = f"{server.flag} *{server.title}*\n\n{t(lang, 'ui.server.choose_method')}"
+    text = f"{server.flag} {server.title}\n\n{t(lang, 'ui.server.choose_method')}"
     if methods:
-        text += "\n\n" + "\n".join(f"• {method.short_label}" for method in methods)
+        text += "\n\n" + "\n".join(f"• {method.short_label.split(' ', 1)[1]}" for method in methods)
     return text, items

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 from typing import Any, Dict, List, Optional, Sequence, Set
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
@@ -112,6 +113,29 @@ def _wizard_close(context: CallbackContext, text: str | None = None) -> None:
         except Exception:
             pass
     _wizard_clear(context)
+
+
+def _start_progress_animation(context: CallbackContext, title: str) -> callable:
+    w = _wizard_get(context)
+    if not w:
+        return lambda: None
+
+    chat_id = int(w["chat_id"])
+    message_id = int(w["message_id"])
+    lang = _wizard_lang(context)
+    stop_event = threading.Event()
+    frames = [".", "..", "..."]
+
+    def worker() -> None:
+        idx = 0
+        while not stop_event.is_set():
+            text = t(lang, "admin.wizard.work_in_progress", title=title, dots=frames[idx % len(frames)])
+            safe_edit_by_ids(context.bot, chat_id, message_id, text, InlineKeyboardMarkup([]), parse_mode=None)
+            idx += 1
+            stop_event.wait(0.8)
+
+    threading.Thread(target=worker, daemon=True).start()
+    return stop_event.set
 
 
 def _servers_menu_text(lang: str) -> str:
@@ -249,11 +273,10 @@ def _server_dashboard_text(servers: Sequence[RegisteredServer], lang: str) -> st
                 prov_suffix += f" | {'ошибки' if lang == 'ru' else 'failed'} {failed}"
             elif attention > 0:
                 prov_suffix += f" | {'внимание' if lang == 'ru' else 'attention'} {attention}"
-        lines.append(
-            f"\n{server.flag} {server.title} ({server.key})"
-            f"\n  {status_icon} {status_text}{prov_suffix}"
-        )
-    return "\n".join(lines)
+        lines.append(f"{server.flag} {server.title} ({server.key})")
+        lines.append(f"• {status_icon} {status_text}{prov_suffix}")
+        lines.append("")
+    return "\n".join(line for line in lines).rstrip()
 
 
 def _server_overall_status(server: RegisteredServer, lang: str) -> tuple[str, str]:
@@ -323,8 +346,7 @@ def _server_card_text(server: RegisteredServer, lang: str) -> str:
     actions = _server_recommended_actions(server, lang)
     lines = [
         f"🖥 {server.flag} {server.title} ({server.key})",
-        "",
-        f"{overall_icon} {overall_text}",
+        f"• {overall_icon} {overall_text}",
         "",
         t(lang, "admin.wizard.server_card_summary"),
         t(lang, "admin.wizard.server_card_infra", icon=server_icon, status=server_text),
@@ -445,11 +467,11 @@ def _advanced_menu_markup(server_key: str, lang: str) -> InlineKeyboardMarkup:
         [
             [
                 InlineKeyboardButton(t(lang, "admin.wizard.advanced_general"), callback_data=f"{CB_SRV}advsection:general:{server_key}"),
-                InlineKeyboardButton(t(lang, "admin.wizard.advanced_xray"), callback_data=f"{CB_SRV}advsection:xray:{server_key}"),
+                InlineKeyboardButton(t(lang, "admin.wizard.advanced_maintenance"), callback_data=f"{CB_SRV}advsection:maintenance:{server_key}"),
             ],
             [
                 InlineKeyboardButton(t(lang, "admin.wizard.advanced_awg"), callback_data=f"{CB_SRV}advsection:awg:{server_key}"),
-                InlineKeyboardButton(t(lang, "admin.wizard.advanced_maintenance"), callback_data=f"{CB_SRV}advsection:maintenance:{server_key}"),
+                InlineKeyboardButton(t(lang, "admin.wizard.advanced_xray"), callback_data=f"{CB_SRV}advsection:xray:{server_key}"),
             ],
             [InlineKeyboardButton(t(lang, "admin.wizard.back_to_server"), callback_data=f"{CB_SRV}card:{server_key}")],
         ]
@@ -480,6 +502,8 @@ def _advanced_section_text(server: RegisteredServer, section: str, lang: str) ->
                 f"⚙️ {server.flag} {server.title} ({server.key})",
                 "",
                 t(lang, "admin.wizard.advanced_xray"),
+                t(lang, "admin.wizard.field_xray_tcp_port") + f": {server.xray_tcp_port}",
+                t(lang, "admin.wizard.field_xray_xhttp_port") + f": {server.xray_xhttp_port}",
                 t(lang, "admin.wizard.advanced_xray_host_line", value=server.xray_host or "—"),
                 t(lang, "admin.wizard.advanced_xray_sni_line", value=server.xray_sni or "—"),
                 t(lang, "admin.wizard.advanced_xray_fp_line", value=server.xray_fp or "—"),
@@ -491,6 +515,7 @@ def _advanced_section_text(server: RegisteredServer, section: str, lang: str) ->
                 f"⚙️ {server.flag} {server.title} ({server.key})",
                 "",
                 t(lang, "admin.wizard.advanced_awg"),
+                t(lang, "admin.wizard.field_awg_port") + f": {server.awg_port}",
                 t(lang, "admin.wizard.advanced_awg_host_line", value=server.awg_public_host or "—"),
                 t(lang, "admin.wizard.advanced_awg_iface_line", value=server.awg_iface or "—"),
                 t(lang, "admin.wizard.advanced_awg_preset_line", value=server.awg_i1_preset or "quic"),
@@ -643,7 +668,7 @@ def _action_result_text(title: str, rc: int, out: str, back_key: str) -> str:
     body = (out or "").strip() or "Без вывода"
     if len(body) > 2500:
         body = body[-2500:]
-    return f"{status} {title}\n\n{body}\n\nOpen server card: {back_key}"
+    return f"{status} {title}\n\n{body}\n\nСервер: {back_key}"
 
 
 def _summary_text(data: Dict[str, Any], editing: bool = False, lang: str = "ru") -> str:
@@ -656,18 +681,18 @@ def _summary_text(data: Dict[str, Any], editing: bool = False, lang: str = "ru")
     action = ("Изменение" if editing else "Создание") if lang == "ru" else ("Editing" if editing else "Creating")
     return (
         f"🖥 {action} {'сервера' if lang == 'ru' else 'server'}\n\n"
-        f"key: {_md(data['key'])}\n"
-        f"title: {_md(data['title'])}\n"
-        f"flag: {_md(data['flag'])}\n"
-        f"region: {_md(data['region'])}\n"
-        f"transport: {_md(data['transport'])}\n"
-        f"target: {_md(target)}\n"
-        f"public_host: {_md(public_host)}\n"
-        f"protocols: {_md(protocols)}\n"
-        f"xray_sni: {_md(xray_sni)}\n"
-        f"xray_fp: {_md(xray_fp)}\n"
-        f"awg_i1_preset: {_md(awg_i1_preset)}\n\n"
-        + ("\n\nПодтвердить?" if lang == "ru" else "\n\nConfirm?")
+        f"• key: {_md(data['key'])}\n"
+        f"• title: {_md(data['title'])}\n"
+        f"• flag: {_md(data['flag'])}\n"
+        f"• region: {_md(data['region'])}\n"
+        f"• transport: {_md(data['transport'])}\n"
+        f"• target: {_md(target)}\n"
+        f"• public_host: {_md(public_host)}\n"
+        f"• protocols: {_md(protocols)}\n"
+        f"• xray_sni: {_md(xray_sni)}\n"
+        f"• xray_fp: {_md(xray_fp)}\n"
+        f"• awg_i1_preset: {_md(awg_i1_preset)}\n\n"
+        + ("Подтвердить?" if lang == "ru" else "Confirm?")
     )
 
 
@@ -1168,51 +1193,77 @@ def on_server_callback(update: Update, context: CallbackContext, payload: str) -
     if payload.startswith("bootrun:"):
         _, action, mode, server_key = payload.split(":", 3)
         preserve_config = mode == "preserve"
+        action_title = {
+            "bootstrap": t(lang, "admin.wizard.bootstrap"),
+            "reinstall": t(lang, "admin.wizard.reinstall"),
+            "delete": t(lang, "admin.wizard.delete_runtime"),
+        }.get(action, t(lang, "admin.wizard.work"))
+        stop_progress = _start_progress_animation(context, action_title)
         if action == "bootstrap":
             rc, out = bootstrap_server(server_key, preserve_config=preserve_config)
+            stop_progress()
             _wizard_edit(context, _action_result_text(t(lang, "admin.wizard.bootstrap"), rc, out, server_key), _server_card_markup(server_key, lang))
             return
         if action == "reinstall":
             rc, out = reinstall_server(server_key, preserve_config=preserve_config)
+            stop_progress()
             _wizard_edit(context, _action_result_text(t(lang, "admin.wizard.reinstall"), rc, out, server_key), _server_card_markup(server_key, lang))
             return
         if action == "delete":
             rc, out = delete_server_runtime(server_key, preserve_config=preserve_config)
+            stop_progress()
             _wizard_edit(context, _action_result_text(t(lang, "admin.wizard.delete_runtime"), rc, out, server_key), _server_card_markup(server_key, lang))
             return
+        stop_progress()
 
     if payload.startswith("action:"):
         _, action, server_key = payload.split(":", 2)
         if action == "probe":
+            stop_progress = _start_progress_animation(context, t(lang, "admin.wizard.probe"))
             rc, out = probe_server(server_key)
+            stop_progress()
             _wizard_edit(context, _action_result_text(t(lang, "admin.wizard.probe"), rc, out, server_key), _server_card_markup(server_key, lang))
             return
         if action == "checkports":
+            stop_progress = _start_progress_animation(context, t(lang, "admin.wizard.check_ports"))
             rc, out = check_server_ports(server_key)
+            stop_progress()
             _wizard_edit(context, _action_result_text(t(lang, "admin.wizard.check_ports"), rc, out, server_key), _server_card_markup(server_key, lang))
             return
         if action == "openports":
+            stop_progress = _start_progress_animation(context, t(lang, "admin.wizard.open_ports"))
             rc, out = open_server_ports(server_key)
+            stop_progress()
             _wizard_edit(context, _action_result_text(t(lang, "admin.wizard.open_ports"), rc, out, server_key), _server_card_markup(server_key, lang))
             return
         if action == "syncenv":
+            stop_progress = _start_progress_animation(context, t(lang, "admin.wizard.sync_env"))
             rc, out = sync_server_node_env(server_key)
+            stop_progress()
             _wizard_edit(context, _action_result_text(t(lang, "admin.wizard.sync_env"), rc, out, server_key), _server_card_markup(server_key, lang))
             return
         if action == "syncxray":
+            stop_progress = _start_progress_animation(context, t(lang, "admin.wizard.sync_xray"))
             rc, out = sync_xray_server_settings(server_key)
+            stop_progress()
             _wizard_edit(context, _action_result_text(t(lang, "admin.wizard.sync_xray"), rc, out, server_key), _server_card_markup(server_key, lang))
             return
         if action == "awgentropy":
+            stop_progress = _start_progress_animation(context, t(lang, "admin.wizard.awg_entropy"))
             rc, out = show_awg_entropy(server_key)
+            stop_progress()
             _wizard_edit(context, _action_result_text(t(lang, "admin.wizard.awg_entropy"), rc, out, server_key), _server_card_markup(server_key, lang))
             return
         if action == "awgregen":
+            stop_progress = _start_progress_animation(context, t(lang, "admin.wizard.awg_regen_entropy"))
             rc, out = regenerate_awg_entropy(server_key)
+            stop_progress()
             _wizard_edit(context, _action_result_text(t(lang, "admin.wizard.awg_regen_entropy"), rc, out, server_key), _server_card_markup(server_key, lang))
             return
         if action == "reconcile":
+            stop_progress = _start_progress_animation(context, t(lang, "admin.wizard.reconcile"))
             rc, out = reconcile_xray_server_state(server_key)
+            stop_progress()
             _wizard_edit(context, _action_result_text(t(lang, "admin.wizard.reconcile"), rc, out, server_key), _server_card_markup(server_key, lang))
             return
 

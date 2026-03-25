@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Set, Tuple
 
@@ -120,6 +121,29 @@ def _wizard_close(context: CallbackContext, text: str | None = None) -> None:
         except Exception:
             pass
     _wizard_clear(context)
+
+
+def _start_progress_animation(context: CallbackContext, title: str) -> callable:
+    w = _wizard_get(context)
+    if not w:
+        return lambda: None
+
+    chat_id = int(w["chat_id"])
+    message_id = int(w["message_id"])
+    lang = _wizard_lang(context)
+    stop_event = threading.Event()
+    frames = [".", "..", "..."]
+
+    def worker() -> None:
+        idx = 0
+        while not stop_event.is_set():
+            text = t(lang, "admin.wizard.work_in_progress", title=title, dots=frames[idx % len(frames)])
+            safe_edit_by_ids(context.bot, chat_id, message_id, text, InlineKeyboardMarkup([]), parse_mode=None)
+            idx += 1
+            stop_event.wait(0.8)
+
+    threading.Thread(target=worker, daemon=True).start()
+    return stop_event.set
 
 def _get_all_names() -> List[str]:
     subs = subs_store.read()
@@ -281,14 +305,6 @@ def _run_async_create(context: CallbackContext) -> None:
     w = _wizard_get(context)
     if not w:
         return
-    safe_edit_by_ids(
-        context.bot,
-        int(w["chat_id"]),
-        int(w["message_id"]),
-        t(_wizard_lang(context), "admin.wizard.creating"),
-        reply_markup=None,
-        parse_mode=PARSE_MODE,
-    )
     try:
         _finish_create(context)
     except Exception as exc:
@@ -306,14 +322,6 @@ def _run_async_save(context: CallbackContext) -> None:
     w = _wizard_get(context)
     if not w:
         return
-    safe_edit_by_ids(
-        context.bot,
-        int(w["chat_id"]),
-        int(w["message_id"]),
-        t(_wizard_lang(context), "admin.wizard.saving"),
-        reply_markup=None,
-        parse_mode=PARSE_MODE,
-    )
     try:
         _save_edit(context)
     except Exception as exc:
@@ -540,34 +548,6 @@ def on_cfg_callback(update: Update, context: CallbackContext, payload: str) -> N
         _wizard_edit(context, *_render_edit_menu(name, w["protocols"], w["sub_days"], frozen=is_frozen(name), lang=lang))
         return
 
-    if payload.startswith("cardfreeze:"):
-        name = payload.split(":", 1)[1]
-        if not _load_profile_into_wizard(context, name):
-            return
-        freeze_profile(name)
-        _wizard_edit(context, *_render_profile_card(name, w["protocols"], w["sub_days"], frozen=True, lang=lang))
-        return
-
-    if payload.startswith("cardunfreeze:"):
-        name = payload.split(":", 1)[1]
-        if not _load_profile_into_wizard(context, name):
-            return
-        unfreeze_profile(name)
-        _wizard_edit(context, *_render_profile_card(name, w["protocols"], w["sub_days"], frozen=False, lang=lang))
-        return
-
-    if payload.startswith("cardreconcile:"):
-        name = payload.split(":", 1)[1]
-        if not _load_profile_into_wizard(context, name):
-            return
-        code, out = reconcile_profile_state(name)
-        prefix = ("🔄 Сверка состояния" if lang == "ru" else "🔄 Reconcile state")
-        text = f"{prefix}\n\n{out}"
-        if code != 0:
-            text = f"⚠️ {prefix}\n\n{out}"
-        _wizard_edit_plain(context, text, _render_profile_card(name, w["protocols"], w["sub_days"], frozen=is_frozen(name), lang=lang)[1])
-        return
-
     if payload.startswith("pick:"):
         name = payload.split(":", 1)[1]
         if not _load_profile_into_wizard(context, name):
@@ -575,15 +555,6 @@ def on_cfg_callback(update: Update, context: CallbackContext, payload: str) -> N
         w["step"] = "edit_menu"
         _wizard_set(context, w)
         _wizard_edit(context, *_render_edit_menu(name, w["protocols"], w["sub_days"], frozen=is_frozen(name), lang=lang))
-        return
-
-    if payload.startswith("carddelete:"):
-        name = payload.split(":", 1)[1]
-        if not _load_profile_into_wizard(context, name):
-            return
-        w["step"] = "delete_confirm"
-        _wizard_set(context, w)
-        _wizard_edit(context, *_render_delete_confirm(name, lang))
         return
 
     if payload.startswith("edit:"):
@@ -603,6 +574,14 @@ def on_cfg_callback(update: Update, context: CallbackContext, payload: str) -> N
             w["step"] = "status_menu"
             _wizard_set(context, w)
             _wizard_edit(context, *_render_status_menu(name, frozen=is_frozen(name), lang=lang))
+            return
+        if act == "reconcile":
+            code, out = reconcile_profile_state(name)
+            prefix = ("🔄 Сверка состояния" if lang == "ru" else "🔄 Reconcile state")
+            text = f"{prefix}\n\n{out}"
+            if code != 0:
+                text = f"⚠️ {prefix}\n\n{out}"
+            _wizard_edit_plain(context, text, _render_edit_menu(name, w["protocols"], w["sub_days"], frozen=is_frozen(name), lang=lang)[1])
             return
         if act == "freeze":
             freeze_profile(name)
@@ -681,6 +660,7 @@ def _finish_create(context: CallbackContext) -> None:
     w = _wizard_get(context)
     if not w:
         return
+    stop_progress = _start_progress_animation(context, t(_wizard_lang(context), "admin.wizard.profile_create"))
     name: str = w["name"]
     protocols: Set[str] = w["protocols"]
     sub_days: Optional[int] = w["sub_days"]
@@ -780,6 +760,7 @@ def _finish_create(context: CallbackContext) -> None:
     w["pick_page"] = 0
     w["step"] = "pick"
     _wizard_set(context, w)
+    stop_progress()
     _wizard_edit_plain(
         context,
         "\n".join(lines) + "\n\nНиже можно выбрать следующий профиль.",
@@ -791,6 +772,7 @@ def _save_edit(context: CallbackContext) -> None:
     w = _wizard_get(context)
     if not w:
         return
+    stop_progress = _start_progress_animation(context, t(_wizard_lang(context), "admin.wizard.save"))
     name: str = w["name"]
     protocols: Set[str] = w["protocols"]
     sub_days: Optional[int] = w["sub_days"]
@@ -950,6 +932,8 @@ def _save_edit(context: CallbackContext) -> None:
             + "\n\n"
             + text.replace("*", "").replace("`", "")
         )
+        stop_progress()
         _wizard_edit_plain(context, plain_text, markup)
         return
+    stop_progress()
     _wizard_edit(context, prefix + "\n\n" + text, markup)

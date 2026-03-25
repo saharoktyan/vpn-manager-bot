@@ -1977,6 +1977,59 @@ def _remote_file_exists(server: RegisteredServer, path: str) -> bool:
     return rc == 0
 
 
+def _port_label(field: str) -> str:
+    labels = {
+        "xray_tcp_port": "Xray TCP",
+        "xray_xhttp_port": "Xray XHTTP",
+        "awg_port": "AWG",
+    }
+    return labels.get(field, field)
+
+
+def _format_port_status_summary(text: str) -> str:
+    port_rows: dict[str, dict[str, str]] = {}
+    for raw_line in (text or "").splitlines():
+        line = raw_line.strip()
+        if line.startswith("PORT_STATUS|"):
+            _, field, proto, port, status, suggestion = (line.split("|", 5) + [""])[:6]
+            row = port_rows.setdefault(field, {})
+            row.update({"proto": proto, "port": port, "port_status": status, "port_suggestion": suggestion.strip()})
+        elif line.startswith("FIREWALL_STATUS|"):
+            _, field, proto, port, status, suggestion = (line.split("|", 5) + [""])[:6]
+            row = port_rows.setdefault(field, {})
+            row.update({"proto": proto, "port": port, "firewall_status": status, "firewall_suggestion": suggestion.strip()})
+
+    if not port_rows:
+        return (text or "").strip()
+
+    lines = ["Сводка по портам:"]
+    for field in ("xray_tcp_port", "xray_xhttp_port", "awg_port"):
+        row = port_rows.get(field)
+        if not row:
+            continue
+        proto = row.get("proto", "?")
+        port = row.get("port", "?")
+        port_status = row.get("port_status", "unknown")
+        firewall_status = row.get("firewall_status", "unknown")
+
+        port_text_map = {
+            "managed": "используется управляемым рантаймом",
+            "free": "свободен",
+            "busy": "занят",
+        }
+        firewall_text_map = {
+            "open": "открыт в firewall",
+            "closed": "закрыт в firewall",
+        }
+        line = f"- {_port_label(field)} {port}/{proto}: {port_text_map.get(port_status, port_status)}, {firewall_text_map.get(firewall_status, firewall_status)}"
+        if port_status == "busy" and row.get("port_suggestion"):
+            line += f" | рекомендуемый порт: {row['port_suggestion']}"
+        if firewall_status == "closed" and row.get("firewall_suggestion"):
+            line += f" | {row['firewall_suggestion']}"
+        lines.append(line)
+    return "\n".join(lines)
+
+
 def _cleanup_server_runtime(server: RegisteredServer, preserve_config: bool) -> Tuple[int, str]:
     preserve = "1" if preserve_config else "0"
     script = f"""#!/usr/bin/env bash
@@ -2005,9 +2058,9 @@ docker_rm "${{AWG_CONTAINER_NAME:-$AWG_CONTAINER}}"
 if [[ "{preserve}" != "1" ]]; then
   rm -f /etc/vpn-bot/node.env
   rm -rf /opt/vpn-manager-node
-  echo "Managed runtime removed with config files."
+  echo "Управляемый рантайм удалён вместе с конфигами."
 else
-  echo "Managed runtime removed. Existing config files were preserved."
+  echo "Управляемый рантайм удалён. Существующие конфиги сохранены."
 fi
 """
     return run_server_command(server, script, timeout=180)
@@ -2041,13 +2094,13 @@ def render_server_node_env(server: RegisteredServer) -> str:
 def sync_server_node_env(server_key: str) -> Tuple[int, str]:
     server = get_server(server_key)
     if not server:
-        return 1, f"Server {server_key} not found"
+        return 1, f"Сервер {server_key} не найден"
     content = render_server_node_env(server)
     rc, out = write_server_file(server, "/etc/vpn-bot/node.env", content, mode="0644")
     if rc != 0:
         return rc, out
     update_server_fields(server.key, notes="node.env synced from bot")
-    return 0, "node.env written to /etc/vpn-bot/node.env"
+    return 0, "Файл node.env записан в /etc/vpn-bot/node.env"
 
 
 def _check_server_ports(server) -> Tuple[int, str]:
@@ -2058,7 +2111,7 @@ def _check_server_ports(server) -> Tuple[int, str]:
     if "awg" in server.protocol_kinds:
         checks.append(("awg_port", "udp", int(server.awg_port)))
     if not checks:
-        return 0, "port_check: skipped"
+        return 0, "Проверка портов пропущена"
 
     payload = "\n".join(f"{field}|{proto}|{port}" for field, proto, port in checks)
     cmd = f"""#!/usr/bin/env bash
@@ -2259,45 +2312,45 @@ rm -f /tmp/vpn-bot-port-check.txt
             if status == "managed":
                 continue
             if status == "busy":
-                conflicts.append(f"- {field}: {port}/{proto} busy")
+                conflicts.append(f"- {field}: {port}/{proto} занят")
                 if suggestion.strip():
                     suggestions.append(f"/setserverfield {server.key} {field} {suggestion.strip()}")
             continue
         if line.startswith("FIREWALL_STATUS|"):
             _, field, proto, port, status, suggestion = (line.split("|", 5) + [""])[:6]
             if status == "closed":
-                firewall_conflicts.append(f"- {field}: {port}/{proto} is not open in firewall")
+                firewall_conflicts.append(f"- {field}: {port}/{proto} не открыт в firewall")
                 if suggestion.strip():
                     firewall_suggestions.append(suggestion.strip())
     if conflicts or firewall_conflicts:
         lines = [
-            f"Port availability check failed for server {server.key}.",
+            f"Проверка портов для сервера {server.key} завершилась ошибкой.",
         ]
         if conflicts:
-            lines.extend(["Busy ports:", *conflicts])
+            lines.extend(["Занятые порты:", *conflicts])
         if firewall_conflicts:
             if conflicts:
                 lines.append("")
-            lines.extend(["Firewall rules missing:", *firewall_conflicts])
+            lines.extend(["Не хватает правил firewall:", *firewall_conflicts])
         if suggestions:
-            lines.extend(["", "Suggested commands:", *[f"- {item}" for item in suggestions]])
+            lines.extend(["", "Рекомендуемые команды:", *[f"- {item}" for item in suggestions]])
         if firewall_suggestions:
-            lines.extend(["", "Suggested firewall commands:", *[f"- {item}" for item in firewall_suggestions]])
+            lines.extend(["", "Рекомендуемые команды для firewall:", *[f"- {item}" for item in firewall_suggestions]])
         return 1, "\n".join(lines)
-    return 0, out
+    return 0, _format_port_status_summary(out)
 
 
 def check_server_ports(server_key: str) -> Tuple[int, str]:
     server = get_server(server_key)
     if not server:
-        return 1, f"Server {server_key} not found"
+        return 1, f"Сервер {server_key} не найден"
     return _check_server_ports(server)
 
 
 def open_server_ports(server_key: str) -> Tuple[int, str]:
     server = get_server(server_key)
     if not server:
-        return 1, f"Server {server_key} not found"
+        return 1, f"Сервер {server_key} не найден"
 
     checks: list[tuple[str, str, int]] = []
     if "xray" in server.protocol_kinds:
@@ -2306,14 +2359,14 @@ def open_server_ports(server_key: str) -> Tuple[int, str]:
     if "awg" in server.protocol_kinds:
         checks.append(("awg_port", "udp", int(server.awg_port)))
     if not checks:
-        return 0, "no managed ports to open"
+        return 0, "Для этого сервера нет управляемых портов"
 
     payload = "\n".join(f"{field}|{proto}|{port}" for field, proto, port in checks)
     cmd = f"""#!/usr/bin/env bash
 set -euo pipefail
 
 command -v ufw >/dev/null 2>&1 || {{
-  echo "ufw is not installed on this host."
+  echo "UFW не установлен на этой ноде."
   exit 1
 }}
 
@@ -2342,39 +2395,39 @@ ufw reload >/dev/null 2>&1 || true
         _, field, proto, port = (line.split("|", 3) + [""])[:4]
         opened.append(f"- {field}: {port}/{proto}")
     if not opened:
-        return 0, "Firewall rules updated."
-    return 0, "Opened firewall rules:\n" + "\n".join(opened)
+        return 0, "Правила firewall обновлены."
+    return 0, "Открыты правила firewall:\n" + "\n".join(opened)
 
 
 def probe_server(server_key: str) -> Tuple[int, str]:
     server = get_server(server_key)
     if not server:
-        return 1, f"Server {server_key} not found"
+        return 1, f"Сервер {server_key} не найден"
     cmd = """#!/usr/bin/env bash
 set -euo pipefail
 
 echo "hostname: $(hostname)"
-echo "user: $(whoami)"
-echo "kernel: $(uname -a)"
+echo "пользователь: $(whoami)"
+echo "ядро: $(uname -a)"
 
 if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
-  echo "docker: ok"
+  echo "docker: доступен"
 elif command -v sudo >/dev/null 2>&1 && sudo docker info >/dev/null 2>&1; then
-  echo "docker: ok (sudo)"
+  echo "docker: доступен через sudo"
 else
-  echo "docker: unavailable"
+  echo "docker: недоступен"
 fi
 
 if [[ -c /dev/net/tun ]]; then
-  echo "tun: ok"
+  echo "tun: доступен"
 else
-  echo "tun: missing"
+  echo "tun: отсутствует"
 fi
 
 if [[ -c /dev/net/tun ]] && { (command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1) || (command -v sudo >/dev/null 2>&1 && sudo docker info >/dev/null 2>&1); }; then
-  echo "awg_userspace_ready: yes"
+  echo "awg_userspace_ready: да"
 else
-  echo "awg_userspace_ready: no"
+  echo "awg_userspace_ready: нет"
 fi
 """
     rc, out = run_server_command(server, cmd, timeout=20)
@@ -2403,9 +2456,9 @@ fi
 def sync_xray_server_settings(server_key: str) -> Tuple[int, str]:
     server = get_server(server_key)
     if not server:
-        return 1, f"Server {server_key} not found"
+        return 1, f"Сервер {server_key} не найден"
     if "xray" not in server.protocol_kinds:
-        return 1, f"Server {server_key} does not have xray enabled"
+        return 1, f"На сервере {server_key} не включён Xray"
 
     rc, out = run_server_command(
         server,
@@ -2425,7 +2478,7 @@ def sync_xray_server_settings(server_key: str) -> Tuple[int, str]:
     try:
         generated = _extract_last_json_object(out)
     except Exception:
-        return 1, f"Could not parse synced Xray settings:\n{out[-1500:]}"
+        return 1, f"Не удалось разобрать синхронизированные настройки Xray:\n{out[-1500:]}"
     update_server_fields(server.key, **generated)
     return 0, json.dumps(generated, ensure_ascii=False, indent=2)
 
@@ -2433,25 +2486,25 @@ def sync_xray_server_settings(server_key: str) -> Tuple[int, str]:
 def show_awg_entropy(server_key: str) -> Tuple[int, str]:
     server = get_server(server_key)
     if not server:
-        return 1, f"Server {server_key} not found"
+        return 1, f"Сервер {server_key} не найден"
     if "awg" not in server.protocol_kinds:
-        return 1, f"Server {server_key} does not have awg enabled"
+        return 1, f"На сервере {server_key} не включён AWG"
     return run_server_command(server, "/opt/vpn-manager-node/show-awg-entropy.sh", timeout=60)
 
 
 def regenerate_awg_entropy(server_key: str) -> Tuple[int, str]:
     server = get_server(server_key)
     if not server:
-        return 1, f"Server {server_key} not found"
+        return 1, f"Сервер {server_key} не найден"
     if "awg" not in server.protocol_kinds:
-        return 1, f"Server {server_key} does not have awg enabled"
+        return 1, f"На сервере {server_key} не включён AWG"
     return run_server_command(server, "/opt/vpn-manager-node/regenerate-awg-entropy.sh", timeout=180)
 
 
 def bootstrap_server(server_key: str, preserve_config: bool = False) -> Tuple[int, str]:
     server = get_server(server_key)
     if not server:
-        return 1, f"Server {server_key} not found"
+        return 1, f"Сервер {server_key} не найден"
 
     port_rc, port_out = _check_server_ports(server)
     if port_rc != 0:
@@ -2527,10 +2580,10 @@ def bootstrap_server(server_key: str, preserve_config: bool = False) -> Tuple[in
                 generated = _extract_last_json_object(out)
             except Exception:
                 _mark(server, "bootstrap_failed", out[-1500:])
-                return 1, f"Could not parse generated Xray settings:\n{out[-1500:]}"
+                return 1, f"Не удалось разобрать сгенерированные настройки Xray:\n{out[-1500:]}"
             if not generated.get("xray_pbk"):
                 _mark(server, "bootstrap_failed", out[-1500:])
-                return 1, f"Generated Xray settings are incomplete:\n{out[-1500:]}"
+                return 1, f"Сгенерированные настройки Xray неполные:\n{out[-1500:]}"
             update_server_fields(server.key, **generated)
         rc, out = run_server_command(server, "/opt/vpn-manager-node/deploy-xray.sh", timeout=300)
         if rc != 0:
@@ -2550,17 +2603,17 @@ def bootstrap_server(server_key: str, preserve_config: bool = False) -> Tuple[in
             _mark(server, "bootstrap_failed", out[-1500:])
             return rc, out
 
-    completed_parts = ["Base packages and helper scripts installed"]
+    completed_parts = ["Установлены базовые пакеты и служебные скрипты"]
     if "xray" in server.protocol_kinds:
         if reused_xray_config:
-            completed_parts.append("Xray config preserved and runtime redeployed")
+            completed_parts.append("Конфиг Xray сохранён, рантайм развёрнут заново")
         else:
-            completed_parts.append("Xray settings generated and runtime deployed")
+            completed_parts.append("Настройки Xray сгенерированы, рантайм развёрнут")
     if "awg" in server.protocol_kinds:
         if reused_awg_config:
-            completed_parts.append("AWG config preserved and runtime redeployed")
+            completed_parts.append("Конфиг AWG сохранён, рантайм развёрнут заново")
         else:
-            completed_parts.append("AWG runtime deployed")
+            completed_parts.append("Рантайм AWG развёрнут")
     summary = ". ".join(completed_parts) + "."
 
     _mark(
@@ -2569,18 +2622,18 @@ def bootstrap_server(server_key: str, preserve_config: bool = False) -> Tuple[in
         summary,
     )
     return 0, (
-        "Bootstrap completed.\n"
+        "Bootstrap завершён.\n"
         f"{summary}\n"
-        "Working node.env was written to /etc/vpn-bot/node.env."
+        "Рабочий node.env записан в /etc/vpn-bot/node.env."
     )
 
 
 def reinstall_server(server_key: str, preserve_config: bool = True) -> Tuple[int, str]:
     server = get_server(server_key)
     if not server:
-        return 1, f"Server {server_key} not found"
+        return 1, f"Сервер {server_key} не найден"
 
-    prefix = "Reinstall mode: preserving existing config.\n\n" if preserve_config else "Reinstall mode: clean reinstall.\n\n"
+    prefix = "Режим переустановки: с сохранением существующего конфига.\n\n" if preserve_config else "Режим переустановки: чистая переустановка.\n\n"
     if not preserve_config:
         rc, out = _cleanup_server_runtime(server, preserve_config=False)
         if rc != 0:
@@ -2593,7 +2646,7 @@ def reinstall_server(server_key: str, preserve_config: bool = True) -> Tuple[int
 def delete_server_runtime(server_key: str, preserve_config: bool = True) -> Tuple[int, str]:
     server = get_server(server_key)
     if not server:
-        return 1, f"Server {server_key} not found"
+        return 1, f"Сервер {server_key} не найден"
 
     rc, out = _cleanup_server_runtime(server, preserve_config=preserve_config)
     if rc != 0:
@@ -2612,5 +2665,5 @@ def delete_server_runtime(server_key: str, preserve_config: bool = True) -> Tupl
             }
         )
     update_server_fields(server.key, **updates)
-    suffix = "Existing config files were preserved." if preserve_config else "Config files and runtime directories were removed."
-    return 0, f"Runtime removed.\n{suffix}"
+    suffix = "Существующие конфиги сохранены." if preserve_config else "Конфиги и директории рантайма удалены."
+    return 0, f"Рантайм удалён.\n{suffix}"

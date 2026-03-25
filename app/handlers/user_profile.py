@@ -286,14 +286,16 @@ def _render_requests_dashboard(ids: List[str], page: int, lang: str) -> tuple[st
             continue
         rows.append([InlineKeyboardButton(f"👤 {_request_label(str(user_id), rec)}", callback_data=f"menu:admin_request_card:{user_id}")])
 
-    nav = []
-    if page > 0:
-        nav.append(InlineKeyboardButton("⬅️ Prev", callback_data=f"menu:admin_requests_page:{page-1}"))
-    nav.append(InlineKeyboardButton(f"{page+1}/{pages}", callback_data=f"menu:admin_requests_page:{page}"))
-    if page < pages - 1:
-        nav.append(InlineKeyboardButton("Next ➡️", callback_data=f"menu:admin_requests_page:{page+1}"))
-    rows.append(nav)
-    rows.append([InlineKeyboardButton(t(lang, "admin.requests.search"), callback_data="menu:admin_requests_search")])
+    if pages > 1:
+        nav = []
+        if page > 0:
+            nav.append(InlineKeyboardButton("⬅️", callback_data=f"menu:admin_requests_page:{page-1}"))
+        nav.append(InlineKeyboardButton(f"{page+1}/{pages}", callback_data=f"menu:admin_requests_page:{page}"))
+        if page < pages - 1:
+            nav.append(InlineKeyboardButton("➡️", callback_data=f"menu:admin_requests_page:{page+1}"))
+        rows.append(nav)
+    if total > 1:
+        rows.append([InlineKeyboardButton(t(lang, "admin.requests.search"), callback_data="menu:admin_requests_search")])
     rows.append([InlineKeyboardButton(t(lang, "menu.back"), callback_data="menu:admin")])
     return t(lang, "admin.requests.title", total=total), InlineKeyboardMarkup(rows)
 
@@ -319,11 +321,11 @@ def _render_request_card(user_id: str, lang: str) -> tuple[str, Any]:
 
     text = (
         f"{t(lang, 'admin.requests.card_title')}\n\n"
-        f"id: `{_md(user_id)}`\n"
-        f"username: {_md(username_text)}\n"
-        f"name: {_md(full_name)}\n"
-        f"{t(lang, 'admin.requests.requested_at')}: `{_md(requested_at)}`\n"
-        f"status: *{status_text}*"
+        f"• id: `{_md(user_id)}`\n"
+        f"• username: {_md(username_text)}\n"
+        f"• name: {_md(full_name)}\n"
+        f"• {t(lang, 'admin.requests.requested_at')}: `{_md(requested_at)}`\n"
+        f"• status: *{status_text}*"
     )
     rows = []
     if rec.get("access_request_pending"):
@@ -508,12 +510,11 @@ def on_menu_callback(update: Update, context: CallbackContext, payload: str) -> 
 
     if payload.startswith("setlang:") and user:
         new_lang = set_user_locale(user.id, payload.split(":", 1)[1])
-        telemetry_available = is_global_telemetry_enabled()
         safe_edit_message(
             update,
             context,
-            t(new_lang, "language.changed", label=t(new_lang, f"language.{new_lang}")),
-            reply_markup=kb_settings_menu(_user_telemetry_enabled(user.id), telemetry_available, new_lang),
+            f"{t(new_lang, 'language.changed', label=t(new_lang, f'language.{new_lang}'))}\n\n{t(new_lang, 'language.title')}",
+            reply_markup=kb_language_menu(new_lang),
             parse_mode=PARSE_MODE,
         )
         return
@@ -747,12 +748,12 @@ def on_menu_callback(update: Update, context: CallbackContext, payload: str) -> 
             (
                 f"{t(lang, 'profile.title')}\n\n"
                 f"{t(lang, 'profile.name', name=name)}\n"
-                f"{t(lang, 'profile.status', status=status_line)}\n"
+                f"{t(lang, 'profile.status', status=status_line)}\n\n"
                 f"{t(lang, 'profile.identity')}\n"
                 f"{t(lang, 'profile.telegram_id', value=user.id)}\n"
                 f"{t(lang, 'profile.username', value=username_text)}\n\n"
-                f"{t(lang, 'profile.access')}\n"
-                f"{server_access}\n\n"
+                f"{t(lang, 'profile.access_section')}\n"
+                f"{server_access}"
             ),
             reply_markup=kb_profile_minimal(lang),
             parse_mode=PARSE_MODE,

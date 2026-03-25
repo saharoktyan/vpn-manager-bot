@@ -28,8 +28,8 @@ def render_proto_keyboard(selected: Set[str], lang: str = "ru") -> InlineKeyboar
         rows.append(current_row)
     rows.append(
         [
-            InlineKeyboardButton("✅ Далее" if lang == "ru" else "✅ Next", callback_data=f"{CB_CFG}proto:done"),
             InlineKeyboardButton(t(lang, "menu.back"), callback_data=f"{CB_CFG}back"),
+            InlineKeyboardButton(t(lang, "admin.wizard.next"), callback_data=f"{CB_CFG}proto:done"),
         ]
     )
     return InlineKeyboardMarkup(rows)
@@ -78,8 +78,8 @@ def render_sub_keyboard(lang: str = "ru") -> InlineKeyboardMarkup:
                 InlineKeyboardButton("♾ Бессрочная" if lang == "ru" else "♾ Lifetime", callback_data=f"{CB_CFG}sub:inf"),
             ],
             [
-                InlineKeyboardButton("✏️ Другое" if lang == "ru" else "✏️ Custom", callback_data=f"{CB_CFG}sub:custom"),
                 InlineKeyboardButton(t(lang, "menu.back"), callback_data=f"{CB_CFG}back"),
+                InlineKeyboardButton("✏️ Другое" if lang == "ru" else "✏️ Custom", callback_data=f"{CB_CFG}sub:custom"),
             ],
         ]
     )
@@ -90,20 +90,22 @@ def render_pick(names: List[str], page: int, lang: str = "ru") -> Tuple[str, Inl
     pages = max(1, (total + LIST_PAGE_SIZE - 1) // LIST_PAGE_SIZE)
     page = max(0, min(page, pages - 1))
     chunk = names[page * LIST_PAGE_SIZE : (page + 1) * LIST_PAGE_SIZE]
+    has_multiple_pages = pages > 1
 
     rows: List[List[InlineKeyboardButton]] = [
         [InlineKeyboardButton(f"👤 {name}", callback_data=f"{CB_CFG}pick:{name}")]
         for name in chunk
     ]
 
-    nav: List[InlineKeyboardButton] = []
-    if page > 0:
-        nav.append(InlineKeyboardButton("⬅️ Prev" if lang == "en" else "⬅️ Prev", callback_data=f"{CB_CFG}pickpage:{page-1}"))
-    nav.append(InlineKeyboardButton(f"{page+1}/{pages}", callback_data=f"{CB_CFG}pickpage:{page}"))
-    if page < pages - 1:
-        nav.append(InlineKeyboardButton("Next ➡️", callback_data=f"{CB_CFG}pickpage:{page+1}"))
-    rows.append(nav)
-    rows.append([InlineKeyboardButton(t(lang, "admin.wizard.search"), callback_data=f"{CB_CFG}search")])
+    if has_multiple_pages:
+        nav: List[InlineKeyboardButton] = []
+        if page > 0:
+            nav.append(InlineKeyboardButton("⬅️", callback_data=f"{CB_CFG}pickpage:{page-1}"))
+        nav.append(InlineKeyboardButton(f"{page+1}/{pages}", callback_data=f"{CB_CFG}pickpage:{page}"))
+        if page < pages - 1:
+            nav.append(InlineKeyboardButton("➡️", callback_data=f"{CB_CFG}pickpage:{page+1}"))
+        rows.append(nav)
+        rows.append([InlineKeyboardButton(t(lang, "admin.wizard.search"), callback_data=f"{CB_CFG}search")])
     rows.append([InlineKeyboardButton(t(lang, "menu.back"), callback_data=f"{CB_CFG}cancel")])
     return t(lang, "admin.wizard.choose_profile", total=total), InlineKeyboardMarkup(rows)
 
@@ -113,21 +115,23 @@ def render_profile_dashboard(names: List[str], page: int, lang: str = "ru") -> T
     pages = max(1, (total + LIST_PAGE_SIZE - 1) // LIST_PAGE_SIZE)
     page = max(0, min(page, pages - 1))
     chunk = names[page * LIST_PAGE_SIZE : (page + 1) * LIST_PAGE_SIZE]
+    has_multiple_pages = pages > 1
 
     rows: List[List[InlineKeyboardButton]] = [
         [InlineKeyboardButton(f"👤 {name}", callback_data=f"{CB_CFG}card:{name}")]
         for name in chunk
     ]
 
-    nav: List[InlineKeyboardButton] = []
-    if page > 0:
-        nav.append(InlineKeyboardButton("⬅️ Prev", callback_data=f"{CB_CFG}dashboard:{page-1}"))
-    nav.append(InlineKeyboardButton(f"{page+1}/{pages}", callback_data=f"{CB_CFG}dashboard:{page}"))
-    if page < pages - 1:
-        nav.append(InlineKeyboardButton("Next ➡️", callback_data=f"{CB_CFG}dashboard:{page+1}"))
-    rows.append(nav)
-    rows.append([InlineKeyboardButton(t(lang, "admin.wizard.search"), callback_data=f"{CB_CFG}search")])
     rows.append([InlineKeyboardButton(t(lang, "admin.wizard.new_profile"), callback_data=f"{CB_CFG}start:create")])
+    if has_multiple_pages:
+        rows.append([InlineKeyboardButton(t(lang, "admin.wizard.search"), callback_data=f"{CB_CFG}search")])
+        nav: List[InlineKeyboardButton] = []
+        if page > 0:
+            nav.append(InlineKeyboardButton("⬅️", callback_data=f"{CB_CFG}dashboard:{page-1}"))
+        nav.append(InlineKeyboardButton(f"{page+1}/{pages}", callback_data=f"{CB_CFG}dashboard:{page}"))
+        if page < pages - 1:
+            nav.append(InlineKeyboardButton("➡️", callback_data=f"{CB_CFG}dashboard:{page+1}"))
+        rows.append(nav)
     rows.append([InlineKeyboardButton(t(lang, "menu.back"), callback_data=f"{CB_CFG}cancel")])
     return t(lang, "admin.wizard.profiles", total=total), InlineKeyboardMarkup(rows)
 
@@ -137,32 +141,34 @@ def render_edit_menu(name: str, protocols: Set[str], sub_days: Optional[int], fr
     state_txt = render_profile_server_state_summary(name, lang)
     sub_txt = "♾ бессрочная" if sub_days is None else f"{sub_days} дн." if lang == "ru" else "♾ lifetime" if sub_days is None else f"{sub_days} d."
     fr = "🧊 заморожен" if frozen and lang == "ru" else "✅ активен" if lang == "ru" else "🧊 frozen" if frozen else "✅ active"
-    title = "✏️ *Редактирование:*" if lang == "ru" else "✏️ *Editing:*"
+    title = "✏️ Редактирование" if lang == "ru" else "✏️ Edit"
     access = "Доступ" if lang == "ru" else "Access"
     provision = "Применение" if lang == "ru" else "Provisioning"
     sub = "Подписка" if lang == "ru" else "Subscription"
     status = "Статус" if lang == "ru" else "Status"
-    choose = "Выбери поле для изменения:" if lang == "ru" else "Choose a field to edit:"
+    choose = "Что изменить:" if lang == "ru" else "What to edit:"
     return (
         (
-            f"{title} `{name}`\n\n"
+            f"{title}: `{name}`\n\n"
             f"{access}:\n{proto_txt}\n\n"
             f"{provision}:\n{state_txt}\n\n"
-            f"{sub}: *{sub_txt}*\n"
-            f"{status}: *{fr}*\n\n"
+            f"• {sub}: *{sub_txt}*\n"
+            f"• {status}: *{fr}*\n\n"
             f"{choose}"
         ),
         InlineKeyboardMarkup(
             [
                 [InlineKeyboardButton("🔌 Протоколы" if lang == "ru" else "🔌 Protocols", callback_data=f"{CB_CFG}edit:proto")],
                 [InlineKeyboardButton("⏳ Подписка" if lang == "ru" else "⏳ Subscription", callback_data=f"{CB_CFG}edit:sub")],
-                [InlineKeyboardButton("🧊 Статус" if lang == "ru" else "🧊 Status", callback_data=f"{CB_CFG}edit:status")],
+                [
+                    InlineKeyboardButton("🧊 Статус" if lang == "ru" else "🧊 Status", callback_data=f"{CB_CFG}edit:status"),
+                    InlineKeyboardButton("🔄 Сверить" if lang == "ru" else "🔄 Reconcile", callback_data=f"{CB_CFG}edit:reconcile"),
+                ],
                 [
                     InlineKeyboardButton("💾 Сохранить" if lang == "ru" else "💾 Save", callback_data=f"{CB_CFG}edit:save"),
                     InlineKeyboardButton("🗑 Удалить профиль" if lang == "ru" else "🗑 Delete Profile", callback_data=f"{CB_CFG}edit:delete"),
                 ],
                 [InlineKeyboardButton("⬅️ К профилю" if lang == "ru" else "⬅️ To Profile", callback_data=f"{CB_CFG}card:{name}")],
-                [InlineKeyboardButton(t(lang, "menu.back"), callback_data=f"{CB_CFG}cancel")],
             ]
         ),
     )
@@ -170,12 +176,12 @@ def render_edit_menu(name: str, protocols: Set[str], sub_days: Optional[int], fr
 
 def render_status_menu(name: str, frozen: bool, lang: str = "ru") -> Tuple[str, InlineKeyboardMarkup]:
     text = (
-        f"🧊 *Статус профиля:* `{name}`\n\n"
+        f"🧊 Статус профиля: `{name}`\n\n"
         f"Сейчас: *{'заморожен' if frozen else 'активен'}*\n\n"
         "Выбери действие:"
         if lang == "ru"
         else
-        f"🧊 *Profile status:* `{name}`\n\n"
+        f"🧊 Profile status: `{name}`\n\n"
         f"Current: *{'frozen' if frozen else 'active'}*\n\n"
         "Choose an action:"
     )
@@ -184,8 +190,10 @@ def render_status_menu(name: str, frozen: bool, lang: str = "ru") -> Tuple[str, 
         InlineKeyboardMarkup(
             [
                 [
-                    InlineKeyboardButton("🧊 Freeze", callback_data=f"{CB_CFG}edit:freeze"),
-                    InlineKeyboardButton("🔥 Unfreeze", callback_data=f"{CB_CFG}edit:unfreeze"),
+                    InlineKeyboardButton(
+                        "🔥 Unfreeze" if frozen else "🧊 Freeze",
+                        callback_data=f"{CB_CFG}edit:unfreeze" if frozen else f"{CB_CFG}edit:freeze",
+                    ),
                 ],
                 [InlineKeyboardButton(t(lang, "menu.back"), callback_data=f"{CB_CFG}back")],
             ]
@@ -234,22 +242,16 @@ def render_profile_card(name: str, protocols: Set[str], sub_days: Optional[int],
     actions = "Быстрые действия:" if lang == "ru" else "Quick actions:"
     return (
         (
-            f"👤 *{name}*\n\n"
+            f"👤 `{name}`\n\n"
             f"{access}:\n{proto_txt}\n\n"
             f"{provision}:\n{state_txt}\n\n"
-            f"{sub}: *{sub_txt}*\n"
-            f"{status}: *{fr}*\n\n"
+            f"• {sub}: *{sub_txt}*\n"
+            f"• {status}: *{fr}*\n\n"
             f"{actions}"
         ),
         InlineKeyboardMarkup(
             [
                 [InlineKeyboardButton("✏️ Редактировать" if lang == "ru" else "✏️ Edit", callback_data=f"{CB_CFG}cardedit:{name}")],
-                [
-                    InlineKeyboardButton("🔄 Сверить" if lang == "ru" else "🔄 Reconcile", callback_data=f"{CB_CFG}cardreconcile:{name}"),
-                    InlineKeyboardButton("🧊 Freeze", callback_data=f"{CB_CFG}cardfreeze:{name}"),
-                    InlineKeyboardButton("🔥 Unfreeze", callback_data=f"{CB_CFG}cardunfreeze:{name}"),
-                ],
-                [InlineKeyboardButton("🗑 Удалить" if lang == "ru" else "🗑 Delete", callback_data=f"{CB_CFG}carddelete:{name}")],
                 [InlineKeyboardButton("⬅️ К профилям" if lang == "ru" else "⬅️ To Profiles", callback_data=f"{CB_CFG}dashboard:0")],
             ]
         ),
