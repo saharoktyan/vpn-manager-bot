@@ -2008,7 +2008,15 @@ if lsmod | grep -q '^amneziawg '; then
 fi
 
 mkdir -p "$DOCKER_DIR/data"
-docker_cmd build --no-cache -t "$IMAGE" "$DOCKER_DIR"
+BUILD_LOG="$(mktemp)"
+if ! docker_cmd build --no-cache -t "$IMAGE" "$DOCKER_DIR" >"$BUILD_LOG" 2>&1; then
+  echo "AWG image build failed." >&2
+  tail -n 120 "$BUILD_LOG" >&2 || true
+  rm -f "$BUILD_LOG"
+  exit 1
+fi
+echo "AWG image built: $IMAGE"
+rm -f "$BUILD_LOG"
 
 if ! docker_cmd run --rm --entrypoint /bin/sh "$IMAGE" -n /opt/amnezia/start.sh >/tmp/awg-syntax.out 2>/tmp/awg-syntax.err; then
   echo "AWG image syntax check failed." >&2
