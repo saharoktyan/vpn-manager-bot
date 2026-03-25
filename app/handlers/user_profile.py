@@ -7,10 +7,10 @@ from typing import Any, Dict, List, Optional
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import CallbackContext
 
-from config import ADMIN_IDS, APP_VERSION, CB_SRV, LIST_PAGE_SIZE, MENU_TITLE, PARSE_MODE
+from config import ADMIN_IDS, APP_VERSION, CB_SRV, LIST_PAGE_SIZE, PARSE_MODE
 from domain.servers import get_access_methods_for_codes
 from i18n import get_locale_for_update, get_user_locale, set_user_locale, t
-from services.app_settings import is_global_telemetry_enabled, set_global_telemetry_enabled
+from services.app_settings import get_menu_title, is_global_telemetry_enabled, set_global_telemetry_enabled, set_menu_title
 from services.provisioning_state import summarize_server_provisioning
 from services.server_registry import list_servers
 from services.awg_profiles import list_awg_server_keys
@@ -239,6 +239,56 @@ def _request_edit(context: CallbackContext, text: str, reply_markup: Any, parse_
     return True
 
 
+def _announce_state_get(context: CallbackContext) -> Optional[Dict[str, Any]]:
+    state = context.user_data.get("admin_announce")
+    return state if isinstance(state, dict) else None
+
+
+def _announce_state_set(context: CallbackContext, state: Dict[str, Any]) -> None:
+    context.user_data["admin_announce"] = state
+
+
+def _announce_state_clear(context: CallbackContext) -> None:
+    context.user_data.pop("admin_announce", None)
+
+
+def _announce_capture_message(update: Update, context: CallbackContext) -> None:
+    state = _announce_state_get(context) or {}
+    q = update.callback_query
+    if q and q.message:
+        state["chat_id"] = q.message.chat_id
+        state["message_id"] = q.message.message_id
+        _announce_state_set(context, state)
+
+
+def _announce_edit(context: CallbackContext, text: str, reply_markup: Any, parse_mode: Optional[str] = PARSE_MODE) -> bool:
+    state = _announce_state_get(context)
+    if not state:
+        return False
+    chat_id = state.get("chat_id")
+    message_id = state.get("message_id")
+    if not chat_id or not message_id:
+        return False
+    safe_edit_by_ids(context.bot, int(chat_id), int(message_id), text, reply_markup=reply_markup, parse_mode=parse_mode)
+    return True
+
+
+def _announce_confirm_markup(lang: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton(t(lang, "admin.announce.edit"), callback_data="menu:admin_announce_edit"),
+                InlineKeyboardButton(t(lang, "admin.announce.send"), callback_data="menu:admin_announce_send"),
+            ],
+            [InlineKeyboardButton(t(lang, "admin.announce.cancel"), callback_data="menu:admin_announce_cancel")],
+        ]
+    )
+
+
+def _announce_confirm_text(lang: str, draft_text: str) -> str:
+    return f"{t(lang, 'admin.announce.confirm')}\n\n{draft_text}"
+
+
 def _all_pending_request_ids() -> List[str]:
     users = users_store.read()
     result: List[str] = []
@@ -261,8 +311,6 @@ def _request_label(user_id: str, rec: Dict[str, Any]) -> str:
 def _render_requests_dashboard(ids: List[str], page: int, lang: str) -> tuple[str, Any]:
     total = len(ids)
     if total == 0:
-        from telegram import InlineKeyboardButton, InlineKeyboardMarkup
-
         return (
             t(lang, "admin.requests.empty"),
             InlineKeyboardMarkup(
@@ -277,7 +325,6 @@ def _render_requests_dashboard(ids: List[str], page: int, lang: str) -> tuple[st
     page = max(0, min(page, pages - 1))
     chunk = ids[page * LIST_PAGE_SIZE : (page + 1) * LIST_PAGE_SIZE]
     users = users_store.read()
-    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
     rows = []
     for user_id in chunk:
@@ -301,8 +348,6 @@ def _render_requests_dashboard(ids: List[str], page: int, lang: str) -> tuple[st
 
 
 def _render_request_card(user_id: str, lang: str) -> tuple[str, Any]:
-    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
-
     users = users_store.read()
     rec = users.get(str(user_id)) if isinstance(users, dict) else None
     if not isinstance(rec, dict):
@@ -398,6 +443,14 @@ def _admin_notify_enabled(user_id: int) -> bool:
     return bool(rec.get("notify_access_requests", True))
 
 
+def _user_announcement_silent(user_id: int) -> bool:
+    users = users_store.read()
+    rec = users.get(str(user_id)) if isinstance(users, dict) else None
+    if not isinstance(rec, dict):
+        return False
+    return bool(rec.get("announcement_silent", False))
+
+
 def _user_telemetry_enabled(user_id: int) -> bool:
     users = users_store.read()
     rec = users.get(str(user_id)) if isinstance(users, dict) else None
@@ -406,8 +459,91 @@ def _user_telemetry_enabled(user_id: int) -> bool:
     return bool(rec.get("telemetry_enabled", False))
 
 
+def _admin_settings_state_get(context: CallbackContext) -> Optional[Dict[str, Any]]:
+    state = context.user_data.get("admin_settings")
+    return state if isinstance(state, dict) else None
+
+
+def _admin_settings_state_set(context: CallbackContext, state: Dict[str, Any]) -> None:
+    context.user_data["admin_settings"] = state
+
+
+def _admin_settings_state_clear(context: CallbackContext) -> None:
+    context.user_data.pop("admin_settings", None)
+
+
+def _admin_settings_capture_message(update: Update, context: CallbackContext) -> None:
+    state = _admin_settings_state_get(context) or {}
+    q = update.callback_query
+    if q and q.message:
+        state["chat_id"] = q.message.chat_id
+        state["message_id"] = q.message.message_id
+        _admin_settings_state_set(context, state)
+
+
+def _render_admin_settings_text(lang: str) -> str:
+    return f"{t(lang, 'admin.settings.title')}\n{t(lang, 'admin.settings.current_title', title=get_menu_title())}"
+
+
 def admin_menu_text_router(update: Update, context: CallbackContext) -> None:
     if not _is_admin(update):
+        return
+    admin_settings_state = _admin_settings_state_get(context)
+    if admin_settings_state and admin_settings_state.get("active") and admin_settings_state.get("step") == "bot_title":
+        lang = get_locale_for_update(update)
+        title = (update.effective_message.text or "").strip()
+        safe_delete_update_message(update, context)
+        if not title:
+            if admin_settings_state.get("chat_id") and admin_settings_state.get("message_id"):
+                safe_edit_by_ids(
+                    context.bot,
+                    int(admin_settings_state["chat_id"]),
+                    int(admin_settings_state["message_id"]),
+                    t(lang, "admin.settings.bot_title_empty"),
+                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(t(lang, "menu.back"), callback_data="menu:admin_settings")]]),
+                    parse_mode=PARSE_MODE,
+                )
+            _admin_settings_state_clear(context)
+            return
+        set_menu_title(title)
+        _admin_settings_state_clear(context)
+        if admin_settings_state.get("chat_id") and admin_settings_state.get("message_id"):
+            safe_edit_by_ids(
+                context.bot,
+                int(admin_settings_state["chat_id"]),
+                int(admin_settings_state["message_id"]),
+                f"{t(lang, 'admin.settings.bot_title_saved')}\n\n{_render_admin_settings_text(lang)}",
+                reply_markup=kb_admin_settings_menu(
+                    _admin_notify_enabled(update.effective_user.id if update.effective_user else 0),
+                    is_global_telemetry_enabled(),
+                    lang,
+                ),
+                parse_mode=PARSE_MODE,
+            )
+        return
+    announce_state = _announce_state_get(context)
+    if announce_state and announce_state.get("active") and announce_state.get("step") == "compose":
+        lang = get_locale_for_update(update)
+        message_text = (update.effective_message.text or "").strip()
+        safe_delete_update_message(update, context)
+        if not message_text:
+            _announce_edit(
+                context,
+                t(lang, "admin.announce.empty"),
+                InlineKeyboardMarkup([[InlineKeyboardButton(t(lang, "menu.back"), callback_data="menu:admin")]]),
+                parse_mode=PARSE_MODE,
+            )
+            _announce_state_clear(context)
+            return
+        announce_state["step"] = "confirm"
+        announce_state["draft_text"] = message_text
+        _announce_state_set(context, announce_state)
+        _announce_edit(
+            context,
+            _announce_confirm_text(lang, message_text),
+            _announce_confirm_markup(lang),
+            parse_mode=None,
+        )
         return
     state = _request_state_get(context)
     if not state or not state.get("active") or state.get("step") != "search":
@@ -433,7 +569,6 @@ def admin_menu_text_router(update: Update, context: CallbackContext) -> None:
             matches.append(str(user_id))
     safe_delete_update_message(update, context)
     if not matches:
-        from telegram import InlineKeyboardButton, InlineKeyboardMarkup
         state.update({"active": True, "step": "dashboard", "page": 0, "ids": []})
         _request_state_set(context, state)
         _request_edit(
@@ -462,7 +597,7 @@ def on_menu_callback(update: Update, context: CallbackContext, payload: str) -> 
             safe_edit_message(
                 update,
                 context,
-                f"*{MENU_TITLE}*\n\n{text}",
+                f"*{get_menu_title()}*\n\n{text}",
                 reply_markup=kb_main_menu(False, False, lang),
                 parse_mode=PARSE_MODE,
             )
@@ -470,25 +605,28 @@ def on_menu_callback(update: Update, context: CallbackContext, payload: str) -> 
         safe_edit_message(
             update,
             context,
-            f"*{MENU_TITLE}*\n\n{t(lang, 'menu.choose_action')}",
+            f"*{get_menu_title()}*\n\n{t(lang, 'menu.choose_action')}",
             reply_markup=kb_main_menu(is_admin, has_access, lang),
             parse_mode=PARSE_MODE,
         )
         return
 
     if payload == "settings":
+        _admin_settings_state_clear(context)
         telemetry_available = is_global_telemetry_enabled()
         safe_edit_message(
             update,
             context,
             t(lang, "settings.title"),
-            reply_markup=kb_settings_menu(_user_telemetry_enabled(user.id if user else 0), telemetry_available, lang),
+            reply_markup=kb_settings_menu(_user_telemetry_enabled(user.id if user else 0), telemetry_available, _user_announcement_silent(user.id if user else 0), lang),
             parse_mode=PARSE_MODE,
         )
         return
 
     if payload == "admin" and is_admin:
+        _announce_state_clear(context)
         _request_state_clear(context)
+        _admin_settings_state_clear(context)
         safe_edit_message(
             update,
             context,
@@ -513,8 +651,21 @@ def on_menu_callback(update: Update, context: CallbackContext, payload: str) -> 
         safe_edit_message(
             update,
             context,
-            f"{t(new_lang, 'language.changed', label=t(new_lang, f'language.{new_lang}'))}\n\n{t(new_lang, 'language.title')}",
+            t(new_lang, "language.title"),
             reply_markup=kb_language_menu(new_lang),
+            parse_mode=PARSE_MODE,
+        )
+        return
+
+    if payload == "settings_toggle_announce_sound" and user:
+        silent = not _user_announcement_silent(user.id)
+        _set_admin_flag(user.id, announcement_silent=silent)
+        telemetry_available = is_global_telemetry_enabled()
+        safe_edit_message(
+            update,
+            context,
+            f"{t(lang, 'settings.saved')}\n\n{t(lang, 'settings.title')}",
+            reply_markup=kb_settings_menu(_user_telemetry_enabled(user.id), telemetry_available, silent, lang),
             parse_mode=PARSE_MODE,
         )
         return
@@ -525,7 +676,7 @@ def on_menu_callback(update: Update, context: CallbackContext, payload: str) -> 
                 update,
                 context,
                 t(lang, "settings.title"),
-                reply_markup=kb_settings_menu(False, False, lang),
+                reply_markup=kb_settings_menu(False, False, _user_announcement_silent(user.id), lang),
                 parse_mode=PARSE_MODE,
             )
             return
@@ -535,16 +686,102 @@ def on_menu_callback(update: Update, context: CallbackContext, payload: str) -> 
             update,
             context,
             f"{t(lang, 'settings.saved')}\n\n{t(lang, 'settings.title')}",
-            reply_markup=kb_settings_menu(enabled, True, lang),
+            reply_markup=kb_settings_menu(enabled, True, _user_announcement_silent(user.id), lang),
+            parse_mode=PARSE_MODE,
+        )
+        return
+
+    if payload == "admin_announce" and is_admin:
+        _announce_capture_message(update, context)
+        _announce_state_set(context, {"active": True, "step": "compose", "draft_text": "", **(_announce_state_get(context) or {})})
+        safe_edit_message(
+            update,
+            context,
+            t(lang, "admin.announce.title"),
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(t(lang, "menu.back"), callback_data="menu:admin")]]),
+            parse_mode=PARSE_MODE,
+        )
+        return
+
+    if payload == "admin_announce_edit" and is_admin:
+        state = _announce_state_get(context) or {}
+        state.update({"active": True, "step": "compose"})
+        _announce_state_set(context, state)
+        _announce_capture_message(update, context)
+        safe_edit_message(
+            update,
+            context,
+            t(lang, "admin.announce.title"),
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(t(lang, "admin.announce.cancel"), callback_data="menu:admin_announce_cancel")]]),
+            parse_mode=PARSE_MODE,
+        )
+        return
+
+    if payload == "admin_announce_cancel" and is_admin:
+        _announce_state_clear(context)
+        safe_edit_message(
+            update,
+            context,
+            t(lang, "admin.announce.cancelled"),
+            reply_markup=kb_admin_menu(lang),
+            parse_mode=PARSE_MODE,
+        )
+        return
+
+    if payload == "admin_announce_send" and is_admin:
+        state = _announce_state_get(context) or {}
+        draft_text = str(state.get("draft_text") or "").strip()
+        if not draft_text:
+            _announce_state_clear(context)
+            safe_edit_message(
+                update,
+                context,
+                t(lang, "admin.announce.empty"),
+                reply_markup=kb_admin_menu(lang),
+                parse_mode=PARSE_MODE,
+            )
+            return
+        users = users_store.read()
+        sent = 0
+        failed = 0
+        sender_id = update.effective_user.id if update.effective_user else None
+        for raw_user_id, rec in users.items():
+            if not isinstance(rec, dict):
+                continue
+            chat_id = rec.get("chat_id")
+            if not chat_id or not rec.get("access_granted"):
+                continue
+            try:
+                target_user_id = int(raw_user_id)
+            except (TypeError, ValueError):
+                target_user_id = None
+            if sender_id and target_user_id == sender_id:
+                continue
+            try:
+                context.bot.send_message(
+                    chat_id=int(chat_id),
+                    text=draft_text,
+                    disable_notification=bool(rec.get("announcement_silent", False)),
+                )
+                sent += 1
+            except Exception:
+                failed += 1
+        _announce_state_clear(context)
+        safe_edit_message(
+            update,
+            context,
+            t(lang, "admin.announce.no_recipients") if sent == 0 and failed == 0 else t(lang, "admin.announce.sent", sent=sent, failed=failed),
+            reply_markup=kb_admin_menu(lang),
             parse_mode=PARSE_MODE,
         )
         return
 
     if payload == "admin_settings" and is_admin:
+        _admin_settings_state_clear(context)
         safe_edit_message(
             update,
             context,
-            t(lang, "admin.settings.title"),
+            _render_admin_settings_text(lang),
             reply_markup=kb_admin_settings_menu(
                 _admin_notify_enabled(user.id if user else 0),
                 is_global_telemetry_enabled(),
@@ -560,8 +797,20 @@ def on_menu_callback(update: Update, context: CallbackContext, payload: str) -> 
         safe_edit_message(
             update,
             context,
-            f"{t(lang, 'admin.settings.saved')}\n\n{t(lang, 'admin.settings.title')}",
+            f"{t(lang, 'admin.settings.saved')}\n\n{_render_admin_settings_text(lang)}",
             reply_markup=kb_admin_settings_menu(enabled, is_global_telemetry_enabled(), lang),
+            parse_mode=PARSE_MODE,
+        )
+        return
+
+    if payload == "admin_settings_bot_title" and is_admin:
+        _admin_settings_capture_message(update, context)
+        _admin_settings_state_set(context, {"active": True, "step": "bot_title", **(_admin_settings_state_get(context) or {})})
+        safe_edit_message(
+            update,
+            context,
+            f"{t(lang, 'admin.settings.bot_title_prompt')}\n\n{t(lang, 'admin.settings.current_title', title=get_menu_title())}",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(t(lang, "menu.back"), callback_data="menu:admin_settings")]]),
             parse_mode=PARSE_MODE,
         )
         return
@@ -571,7 +820,7 @@ def on_menu_callback(update: Update, context: CallbackContext, payload: str) -> 
         safe_edit_message(
             update,
             context,
-            f"{t(lang, 'admin.settings.saved')}\n\n{t(lang, 'admin.settings.title')}",
+            f"{t(lang, 'admin.settings.saved')}\n\n{_render_admin_settings_text(lang)}",
             reply_markup=kb_admin_settings_menu(_admin_notify_enabled(user.id if user else 0), enabled, lang),
             parse_mode=PARSE_MODE,
         )
@@ -586,7 +835,6 @@ def on_menu_callback(update: Update, context: CallbackContext, payload: str) -> 
         state = _request_state_get(context) or {}
         state.update({"active": True, "step": "search"})
         _request_state_set(context, state)
-        from telegram import InlineKeyboardButton, InlineKeyboardMarkup
         safe_edit_message(
             update,
             context,
@@ -615,8 +863,6 @@ def on_menu_callback(update: Update, context: CallbackContext, payload: str) -> 
         return
 
     if payload.startswith("admin_request_approve:") and is_admin:
-        from telegram import InlineKeyboardButton, InlineKeyboardMarkup
-
         req_user_id = int(payload.rsplit(":", 1)[-1])
         profile_name = _ensure_profile_for_request(req_user_id)
         _set_admin_flag(req_user_id, access_granted=True, access_request_pending=False, profile_name=profile_name)
@@ -674,6 +920,7 @@ def on_menu_callback(update: Update, context: CallbackContext, payload: str) -> 
             item["access_granted"] = False
             item["access_request_sent_at"] = datetime.utcnow().isoformat(timespec="seconds") + "Z"
             item["notify_access_requests"] = bool(item.get("notify_access_requests", True))
+            item["announcement_silent"] = bool(item.get("announcement_silent", False))
             item["telemetry_enabled"] = bool(item.get("telemetry_enabled", False))
             users_db[str(user.id)] = item
             return users_db
@@ -682,7 +929,6 @@ def on_menu_callback(update: Update, context: CallbackContext, payload: str) -> 
 
         username_text = f"@{user.username}" if user.username else "—"
         full_name = " ".join(part for part in [(user.first_name or "").strip(), (user.last_name or "").strip()] if part) or "—"
-        from telegram import InlineKeyboardButton, InlineKeyboardMarkup
         for admin_id in ADMIN_IDS:
             if not _admin_notify_enabled(admin_id):
                 continue
@@ -907,7 +1153,7 @@ def on_menu_callback(update: Update, context: CallbackContext, payload: str) -> 
     safe_edit_message(
         update,
         context,
-        f"*{MENU_TITLE}*\n\n{t(lang, 'menu.choose_action')}",
+        f"*{get_menu_title()}*\n\n{t(lang, 'menu.choose_action')}",
         reply_markup=kb_main_menu(is_admin, _has_access(update), lang),
         parse_mode=PARSE_MODE,
     )

@@ -9,9 +9,10 @@ import qrcode
 from telegram import Update
 from telegram.ext import CallbackContext
 
-from config import MENU_TITLE, PARSE_MODE
+from config import PARSE_MODE
 from domain.servers import AccessMethod, get_access_method_by_getkey_payload, get_access_methods_for_codes, get_awg_access_method_by_server_key, get_server
 from i18n import get_locale_for_update, t
+from services.app_settings import get_menu_title
 from services import xray as xray_svc
 from services.awg import _extract_wg_conf
 from services.awg_profiles import get_awg_server, update_awg_server
@@ -466,7 +467,7 @@ def on_getkey_callback(update: Update, context: CallbackContext, payload: str) -
     safe_edit_message(
         update,
         context,
-        f"*{MENU_TITLE}*\n\n{t(lang, 'menu.choose_action')}",
+        f"*{get_menu_title()}*\n\n{t(lang, 'menu.choose_action')}",
         reply_markup=kb_main_menu(is_admin, True, lang),
         parse_mode=PARSE_MODE,
     )

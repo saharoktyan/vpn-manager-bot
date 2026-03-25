@@ -217,7 +217,7 @@ class SQLiteTelegramUsersStore:
             """
             SELECT telegram_user_id, chat_id, username, first_name, last_name, profile_name, locale,
                    access_granted, access_request_pending, access_request_sent_at,
-                   notify_access_requests, telemetry_enabled,
+                   notify_access_requests, announcement_silent, telemetry_enabled,
                    updated_at, last_key_at, key_issued_count
             FROM telegram_users
             ORDER BY telegram_user_id
@@ -236,6 +236,7 @@ class SQLiteTelegramUsersStore:
                 "access_request_pending": bool(row["access_request_pending"]) if row["access_request_pending"] is not None else False,
                 "access_request_sent_at": row["access_request_sent_at"],
                 "notify_access_requests": bool(row["notify_access_requests"]) if row["notify_access_requests"] is not None else True,
+                "announcement_silent": bool(row["announcement_silent"]) if row["announcement_silent"] is not None else False,
                 "telemetry_enabled": bool(row["telemetry_enabled"]) if row["telemetry_enabled"] is not None else False,
                 "updated_at": row["updated_at"],
                 "last_key_at": row["last_key_at"],
@@ -262,9 +263,9 @@ class SQLiteTelegramUsersStore:
                 INSERT INTO telegram_users(
                     telegram_user_id, chat_id, username, first_name, last_name, profile_name,
                     locale, access_granted, access_request_pending, access_request_sent_at,
-                    notify_access_requests, telemetry_enabled,
+                    notify_access_requests, announcement_silent, telemetry_enabled,
                     updated_at, last_key_at, key_issued_count
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """
                 ,
                 (
@@ -279,6 +280,7 @@ class SQLiteTelegramUsersStore:
                     1 if rec.get("access_request_pending") else 0,
                     rec.get("access_request_sent_at"),
                     1 if rec.get("notify_access_requests", True) else 0,
+                    1 if rec.get("announcement_silent") else 0,
                     1 if rec.get("telemetry_enabled") else 0,
                     rec.get("updated_at"),
                     rec.get("last_key_at"),
@@ -305,7 +307,7 @@ class SQLiteTelegramUsersStore:
                 """
                 SELECT chat_id, username, first_name, last_name, profile_name, locale,
                        access_granted, access_request_pending, access_request_sent_at,
-                       notify_access_requests, telemetry_enabled,
+                       notify_access_requests, announcement_silent, telemetry_enabled,
                        updated_at, last_key_at, key_issued_count
                 FROM telegram_users
                 WHERE telegram_user_id = ?
@@ -323,6 +325,7 @@ class SQLiteTelegramUsersStore:
                 "access_request_pending": bool(row["access_request_pending"]) if row and row["access_request_pending"] is not None else False,
                 "access_request_sent_at": row["access_request_sent_at"] if row else None,
                 "notify_access_requests": bool(row["notify_access_requests"]) if row and row["notify_access_requests"] is not None else True,
+                "announcement_silent": bool(row["announcement_silent"]) if row and row["announcement_silent"] is not None else False,
                 "telemetry_enabled": bool(row["telemetry_enabled"]) if row and row["telemetry_enabled"] is not None else False,
                 "updated_at": row["updated_at"] if row else None,
                 "last_key_at": row["last_key_at"] if row else None,
@@ -334,9 +337,9 @@ class SQLiteTelegramUsersStore:
                 INSERT INTO telegram_users(
                     telegram_user_id, chat_id, username, first_name, last_name, profile_name,
                     locale, access_granted, access_request_pending, access_request_sent_at,
-                    notify_access_requests, telemetry_enabled,
+                    notify_access_requests, announcement_silent, telemetry_enabled,
                     updated_at, last_key_at, key_issued_count
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(telegram_user_id) DO UPDATE SET
                     chat_id=excluded.chat_id,
                     username=excluded.username,
@@ -348,6 +351,7 @@ class SQLiteTelegramUsersStore:
                     access_request_pending=excluded.access_request_pending,
                     access_request_sent_at=excluded.access_request_sent_at,
                     notify_access_requests=excluded.notify_access_requests,
+                    announcement_silent=excluded.announcement_silent,
                     telemetry_enabled=excluded.telemetry_enabled,
                     updated_at=excluded.updated_at,
                     last_key_at=excluded.last_key_at,
@@ -365,6 +369,7 @@ class SQLiteTelegramUsersStore:
                     1 if rec.get("access_request_pending") else 0,
                     rec.get("access_request_sent_at"),
                     1 if rec.get("notify_access_requests", True) else 0,
+                    1 if rec.get("announcement_silent") else 0,
                     1 if rec.get("telemetry_enabled") else 0,
                     rec.get("updated_at"),
                     rec.get("last_key_at"),

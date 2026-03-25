@@ -9,7 +9,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import CallbackContext
 
-from config import CB_CFG, MENU_TITLE, PARSE_MODE
+from config import CB_CFG, PARSE_MODE
 from domain.servers import (
     get_access_method,
     get_access_methods_for_codes,
@@ -38,6 +38,7 @@ from ui.menu import is_admin
 from utils.keyboards import kb_admin_menu, kb_main_menu
 from utils.tg import answer_cb, safe_delete_by_id, safe_delete_update_message, safe_edit_by_ids, safe_edit_message
 from i18n import get_locale_for_update, t
+from services.app_settings import get_menu_title
 
 from .admin_common import guard, kb_back_menu
 
@@ -401,7 +402,7 @@ def on_cfg_callback(update: Update, context: CallbackContext, payload: str) -> N
         safe_edit_message(
             update,
             context,
-            f"*{MENU_TITLE}*\n\n{t(lang, 'menu.choose_action')}",
+            f"*{get_menu_title()}*\n\n{t(lang, 'menu.choose_action')}",
             reply_markup=kb_main_menu(is_admin(update), True, lang),
             parse_mode=PARSE_MODE,
         )
@@ -611,6 +612,7 @@ def _delete_profile_everywhere(context: CallbackContext) -> None:
     w = _wizard_get(context)
     if not w:
         return
+    lang = _wizard_lang(context)
     name = w["name"]
     errors: List[str] = []
     done: List[str] = []
@@ -620,7 +622,10 @@ def _delete_profile_everywhere(context: CallbackContext) -> None:
             continue
         code, _out = xray_svc.delete_user(name, server.key)
         if code == 0:
-            done.append(f"Xray {server.key}: ✅ удалено")
+            done.append(
+                f"Xray {server.key}: "
+                + ("✅ удалено" if lang == "ru" else "✅ deleted")
+            )
         else:
             errors.append(f"Xray {server.key}: rc={code}")
 
@@ -628,7 +633,10 @@ def _delete_profile_everywhere(context: CallbackContext) -> None:
     for server_key in sorted(awg_servers.keys()):
         code2, _out2 = delete_awg_user(server_key, name)
         if code2 == 0:
-            done.append(f"AWG {server_key}: ✅ удалено")
+            done.append(
+                f"AWG {server_key}: "
+                + ("✅ удалено" if lang == "ru" else "✅ deleted")
+            )
         else:
             errors.append(f"AWG {server_key}: rc={code2}")
     remove_awg_profile(name)
@@ -637,20 +645,24 @@ def _delete_profile_everywhere(context: CallbackContext) -> None:
     if isinstance(subs, dict):
         subs.pop(name, None)
         subs_store.write(subs)
-    done.append("subs.json: ✅ очищено")
+    done.append("subs.json: " + ("✅ очищено" if lang == "ru" else "✅ cleared"))
 
     names = [item for item in _get_all_names() if item != name]
-    text = "Удаление завершено\n\n" + "\n".join(f"- {item}" for item in done)
+    text = t(lang, "admin.wizard.profile_deleted") + "\n\n" + "\n".join(f"- {item}" for item in done)
     if errors:
-        text += "\n\nОшибки/варнинги:\n" + "\n".join(f"• {err}" for err in errors)
+        text += (
+            "\n\n"
+            + ("Ошибки и предупреждения:\n" if lang == "ru" else "Errors and warnings:\n")
+            + "\n".join(f"• {err}" for err in errors)
+        )
     w["all_names"] = names
     w["pick_page"] = 0
     w["step"] = "pick"
     _wizard_set(context, w)
     _wizard_edit_plain(
         context,
-        text + "\n\nНиже можно выбрать следующий профиль.",
-        _render_profile_dashboard(names, 0)[1] if names else kb_back_menu(),
+        text + "\n\n" + t(lang, "admin.wizard.next_profile_hint"),
+        _render_profile_dashboard(names, 0, lang)[1] if names else kb_back_menu(lang),
     )
     if not names:
         _wizard_clear(context)

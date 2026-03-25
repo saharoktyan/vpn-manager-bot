@@ -6,10 +6,11 @@ from telegram import Update
 from telegram.ext import CallbackContext
 from utils.tg import answer_cb, safe_edit_message
 from utils.keyboards import kb_main_menu
-from config import CB_CFG, CB_GETKEY, CB_MENU, CB_SRV, MENU_TITLE, PARSE_MODE
+from config import CB_CFG, CB_GETKEY, CB_MENU, CB_SRV, PARSE_MODE
 from handlers import user as user_handlers
 from handlers import admin as admin_handlers
 from i18n import get_locale_for_update, t
+from services.app_settings import get_menu_title
 
 logger = logging.getLogger(__name__)
 
@@ -47,7 +48,7 @@ def on_callback(update: Update, context: CallbackContext) -> None:
 
     safe_edit_message(
         update, context,
-        f"*{MENU_TITLE}*\n\n{t(get_locale_for_update(update), 'menu.choose_action')}",
+        f"*{get_menu_title()}*\n\n{t(get_locale_for_update(update), 'menu.choose_action')}",
         reply_markup=kb_main_menu(
             user_handlers._is_admin(update),
             user_handlers._has_access(update),

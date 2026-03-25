@@ -68,6 +68,7 @@ BASE_DDL: Iterable[str] = (
         access_request_pending INTEGER NOT NULL DEFAULT 0,
         access_request_sent_at TEXT,
         notify_access_requests INTEGER NOT NULL DEFAULT 1,
+        announcement_silent INTEGER NOT NULL DEFAULT 0,
         telemetry_enabled INTEGER NOT NULL DEFAULT 0,
         updated_at TEXT,
         last_key_at TEXT,
@@ -196,6 +197,8 @@ def _migrate_telegram_users_table(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE telegram_users ADD COLUMN access_request_sent_at TEXT")
     if columns and "notify_access_requests" not in columns:
         conn.execute("ALTER TABLE telegram_users ADD COLUMN notify_access_requests INTEGER NOT NULL DEFAULT 1")
+    if columns and "announcement_silent" not in columns:
+        conn.execute("ALTER TABLE telegram_users ADD COLUMN announcement_silent INTEGER NOT NULL DEFAULT 0")
     if columns and "telemetry_enabled" not in columns:
         conn.execute("ALTER TABLE telegram_users ADD COLUMN telemetry_enabled INTEGER NOT NULL DEFAULT 0")
 

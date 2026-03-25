@@ -39,6 +39,7 @@ def kb_admin_menu(lang: str = "ru") -> InlineKeyboardMarkup:
             InlineKeyboardButton(t(lang, "menu.ssh_key"), callback_data=f"{CB_MENU}sshkey"),
             InlineKeyboardButton(t(lang, "menu.admin_settings"), callback_data=f"{CB_MENU}admin_settings"),
         ],
+        [InlineKeyboardButton(t(lang, "menu.announcement"), callback_data=f"{CB_MENU}admin_announce")],
         [InlineKeyboardButton(t(lang, "menu.back"), callback_data=f"{CB_MENU}main")],
     ])
 
@@ -159,8 +160,10 @@ def kb_language_menu(current_locale: str) -> InlineKeyboardMarkup:
     ])
 
 
-def kb_settings_menu(telemetry_enabled: bool, telemetry_available: bool, lang: str = "ru") -> InlineKeyboardMarkup:
+def kb_settings_menu(telemetry_enabled: bool, telemetry_available: bool, announcement_silent: bool, lang: str = "ru") -> InlineKeyboardMarkup:
     rows = [[InlineKeyboardButton(t(lang, "menu.language"), callback_data=f"{CB_MENU}language")]]
+    announce_label = t(lang, "settings.announcements_silent_on") if announcement_silent else t(lang, "settings.announcements_silent_off")
+    rows.append([InlineKeyboardButton(announce_label, callback_data=f"{CB_MENU}settings_toggle_announce_sound")])
     if telemetry_available:
         telemetry_label = t(lang, "settings.telemetry_on") if telemetry_enabled else t(lang, "settings.telemetry_off")
         rows.append([InlineKeyboardButton(telemetry_label, callback_data=f"{CB_MENU}settings_toggle_telemetry")])
@@ -172,6 +175,7 @@ def kb_admin_settings_menu(notify_enabled: bool, telemetry_enabled: bool, lang: 
     label = t(lang, "admin.settings.notifications_on") if notify_enabled else t(lang, "admin.settings.notifications_off")
     telemetry_label = t(lang, "admin.settings.telemetry_on") if telemetry_enabled else t(lang, "admin.settings.telemetry_off")
     return InlineKeyboardMarkup([
+        [InlineKeyboardButton(t(lang, "admin.settings.bot_title"), callback_data=f"{CB_MENU}admin_settings_bot_title")],
         [InlineKeyboardButton(label, callback_data=f"{CB_MENU}admin_settings_toggle_notify")],
         [InlineKeyboardButton(telemetry_label, callback_data=f"{CB_MENU}admin_settings_toggle_telemetry")],
         [InlineKeyboardButton(t(lang, "menu.back"), callback_data=f"{CB_MENU}admin")],

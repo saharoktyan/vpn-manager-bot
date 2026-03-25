@@ -7,9 +7,10 @@ from typing import Any, Dict, List, Tuple
 from telegram import Update
 from telegram.ext import CallbackContext
 
-from config import ADMIN_IDS, APP_VERSION, MENU_TITLE, PARSE_MODE
+from config import ADMIN_IDS, APP_VERSION, PARSE_MODE
 from domain.servers import get_access_methods_for_codes, get_tracked_awg_server_keys
 from i18n import detect_locale, get_locale_for_update, t
+from services.app_settings import get_menu_title
 from services.subscriptions import get_profile, subs_store, users_store
 from utils.keyboards import kb_main_menu
 
@@ -227,14 +228,14 @@ def start_cmd(update: Update, context: CallbackContext) -> None:
     if not has_access:
         text = _access_gate_text(user.id, lang)
         update.effective_message.reply_text(
-            f"*{MENU_TITLE}*\n\n{text}",
+            f"*{get_menu_title()}*\n\n{text}",
             parse_mode=PARSE_MODE,
             reply_markup=kb_main_menu(False, False, lang),
             disable_web_page_preview=True,
         )
         return
     update.effective_message.reply_text(
-        f"*{MENU_TITLE}*\n\n{t(lang, 'menu.choose_action')}",
+        f"*{get_menu_title()}*\n\n{t(lang, 'menu.choose_action')}",
         parse_mode=PARSE_MODE,
         reply_markup=kb_main_menu(_is_admin(update), has_access, lang),
         disable_web_page_preview=True,
@@ -250,7 +251,7 @@ def whoami_cmd(update: Update, context: CallbackContext) -> None:
 
 def version_cmd(update: Update, context: CallbackContext) -> None:
     lang = get_locale_for_update(update)
-    update.effective_message.reply_text(f"{MENU_TITLE}\n{t(lang, 'version.label', version=APP_VERSION)}")
+    update.effective_message.reply_text(f"{get_menu_title()}\n{t(lang, 'version.label', version=APP_VERSION)}")
 
 
 def getkey_cmd(update: Update, context: CallbackContext) -> None:

@@ -4,8 +4,9 @@ from __future__ import annotations
 from telegram import Update
 from telegram.ext import CallbackContext
 
-from config import MENU_TITLE, PARSE_MODE
+from config import PARSE_MODE
 from i18n import get_locale_for_update, t
+from services.app_settings import get_menu_title
 from utils.tg import safe_edit_message
 from utils.keyboards import kb_main_menu
 import re
@@ -22,7 +23,7 @@ def render_main_menu(update: Update, context: CallbackContext) -> None:
     safe_edit_message(
         update,
         context,
-        f"*{MENU_TITLE}*\n\n{t(lang, 'menu.choose_action')}",
+        f"*{get_menu_title()}*\n\n{t(lang, 'menu.choose_action')}",
         reply_markup=kb_main_menu(is_admin(update), _has_access(update), lang),
         parse_mode=PARSE_MODE,
     )
