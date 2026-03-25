@@ -1950,7 +1950,7 @@ setup_nat
 
 echo "AWG runtime ready: iface=$IFACE pub_iface=${PUB_IFACE:-none}"
 
-tail -f /dev/null
+exec sh -c 'while :; do sleep 3600; done'
 EOF
 RUN chmod a+x /opt/amnezia/start.sh
 
