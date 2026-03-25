@@ -2042,7 +2042,7 @@ fi
 
 docker_cmd run -d \
   --name "$CONTAINER" \
-  --restart unless-stopped \
+  --restart no \
   --cap-add NET_ADMIN \
   --device /dev/net/tun:/dev/net/tun \
   --sysctl net.ipv4.ip_forward=1 \
@@ -2054,13 +2054,19 @@ docker_cmd run -d \
   -v "$DOCKER_DIR/data:/opt/amnezia/awg" \
   "$IMAGE" >/dev/null
 
-sleep 2
-if ! docker_cmd ps --format '{{.Names}}' | grep -q "^${CONTAINER}$"; then
+sleep 3
+STATE="$(docker_cmd inspect -f '{{.State.Status}}' "$CONTAINER" 2>/dev/null || echo unknown)"
+if [[ "$STATE" != "running" ]]; then
   echo "AWG container failed to start." >&2
+  echo "state: $STATE" >&2
+  docker_cmd inspect -f 'exit_code={{.State.ExitCode}} error={{.State.Error}} oom_killed={{.State.OOMKilled}} started_at={{.State.StartedAt}} finished_at={{.State.FinishedAt}}' "$CONTAINER" >&2 || true
+  echo "host_arch: $(uname -m 2>/dev/null || echo unknown)" >&2
+  docker_cmd image inspect "$IMAGE" -f 'image_os={{.Os}} image_arch={{.Architecture}}' >&2 || true
   docker_cmd logs "$CONTAINER" >&2 || true
   exit 1
 fi
 
+docker_cmd update --restart unless-stopped "$CONTAINER" >/dev/null 2>&1 || true
 echo "AWG container deployed: $CONTAINER"
 """
 
