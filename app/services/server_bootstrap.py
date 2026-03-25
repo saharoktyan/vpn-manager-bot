@@ -1980,7 +1980,7 @@ RUN echo -e " \\n\\
   * hard nofile 51200 \\n\\
   " | sed -e 's/^\\s\\+//g' | tee -a /etc/security/limits.conf
 
-ENTRYPOINT [ "dumb-init", "/opt/amnezia/start.sh" ]
+ENTRYPOINT [ "dumb-init", "bash", "/opt/amnezia/start.sh" ]
 CMD [ "" ]
 """
 
@@ -2616,13 +2616,14 @@ def install_server_docker(server_key: str) -> Tuple[int, str]:
     rc, out = run_server_command(server, _install_docker_script(), timeout=900)
     docker_ok, docker_status = _docker_status(server)
     if docker_ok:
-        suffix = "Docker установлен и доступен через sudo." if docker_status == "available_via_sudo" else "Docker установлен и готов к работе."
-        body = (out or "").strip()
-        return 0, f"{body}\n\n{suffix}".strip()
+        if docker_status == "available_via_sudo":
+            return 0, "DOCKER_INSTALL_STATUS|ok|available_via_sudo"
+        return 0, "DOCKER_INSTALL_STATUS|ok|available"
 
     if rc != 0:
-        return rc, _docker_install_suggestion(docker_status, out)
-    return 1, _docker_install_suggestion(docker_status, out)
+        tail = (out or "").strip()[-2000:]
+        return rc, f"DOCKER_INSTALL_STATUS|error|{docker_status}\n{tail}".strip()
+    return 1, f"DOCKER_INSTALL_STATUS|error|{docker_status}"
 
 
 def is_server_docker_available(server_key: str) -> bool:

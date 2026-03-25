@@ -411,11 +411,11 @@ def _bootstrap_menu_text(server: RegisteredServer, lang: str) -> str:
 
 
 def _bootstrap_menu_markup(server: RegisteredServer, lang: str) -> InlineKeyboardMarkup:
-    rows: list[list[InlineKeyboardButton]]
+    rows: list[list[InlineKeyboardButton]] = []
     if not is_server_docker_available(server.key):
-        rows = [[InlineKeyboardButton(t(lang, "admin.wizard.install_docker"), callback_data=f"{CB_SRV}action:installdocker:{server.key}")]]
-    else:
-        rows = []
+        rows.append([InlineKeyboardButton(t(lang, "admin.wizard.install_docker"), callback_data=f"{CB_SRV}action:installdocker:{server.key}")])
+        rows.append([InlineKeyboardButton(t(lang, "admin.wizard.back_to_server"), callback_data=f"{CB_SRV}card:{server.key}")])
+        return InlineKeyboardMarkup(rows)
     if server.bootstrap_state == "bootstrapped":
         rows.append(
             [
@@ -667,12 +667,53 @@ def _open_advanced_section(context: CallbackContext, server_key: str, section: s
     _wizard_edit(context, _advanced_section_text(server, section, _wizard_lang(context)), _advanced_section_markup(server_key, section, _wizard_lang(context)))
 
 
-def _action_result_text(title: str, rc: int, out: str, back_key: str) -> str:
+def _localize_action_output(out: str, lang: str) -> str:
+    body = (out or "").strip()
+    if not body:
+        return t(lang, "admin.wizard.no_output")
+
+    if body.startswith("DOCKER_INSTALL_STATUS|"):
+        parts = body.splitlines()
+        header = parts[0].split("|")
+        details = "\n".join(parts[1:]).strip()
+        status = header[1] if len(header) > 1 else "error"
+        mode = header[2] if len(header) > 2 else "unknown"
+        if status == "ok":
+            if mode == "available_via_sudo":
+                return t(lang, "admin.wizard.docker_install_ok_sudo")
+            return t(lang, "admin.wizard.docker_install_ok")
+        msg = t(lang, "admin.wizard.docker_install_error")
+        if details:
+            msg += "\n\n" + details[-1500:]
+        return msg
+
+    missing_block_ru = (
+        "Docker недоступен на сервере.\n\n"
+        "Bootstrap не может продолжиться без рабочего Docker.\n"
+        "Установи и запусти Docker, затем повтори Probe или Bootstrap.\n\n"
+        "Рекомендуемые команды:\n"
+        "apt-get update\n"
+        "apt-get install -y docker.io\n"
+        "apt-cache show docker-compose-plugin >/dev/null 2>&1 && apt-get install -y docker-compose-plugin || true\n"
+        "systemctl enable --now docker || service docker start"
+    )
+    sudo_block_ru = (
+        "Docker доступен только через sudo.\n\n"
+        "Для bootstrap это обычно нормально, но если на сервере дальше возникают ошибки доступа к Docker, проверь права пользователя или группу docker."
+    )
+    if missing_block_ru in body:
+        body = body.replace(missing_block_ru, t(lang, "admin.wizard.docker_missing_block"))
+    if sudo_block_ru in body:
+        body = body.replace(sudo_block_ru, t(lang, "admin.wizard.docker_sudo_block"))
+    return body
+
+
+def _action_result_text(title: str, rc: int, out: str, back_key: str, lang: str) -> str:
     status = "✅" if rc == 0 else "⚠️"
-    body = (out or "").strip() or "Без вывода"
+    body = _localize_action_output(out, lang)
     if len(body) > 2500:
         body = body[-2500:]
-    return f"{status} {title}\n\n{body}\n\nСервер: {back_key}"
+    return f"{status} {title}\n\n{body}\n\n{t(lang, 'admin.wizard.server_label')}: {back_key}"
 
 
 def _summary_text(data: Dict[str, Any], editing: bool = False, lang: str = "ru") -> str:
@@ -1206,17 +1247,17 @@ def on_server_callback(update: Update, context: CallbackContext, payload: str) -
         if action == "bootstrap":
             rc, out = bootstrap_server(server_key, preserve_config=preserve_config)
             stop_progress()
-            _wizard_edit(context, _action_result_text(t(lang, "admin.wizard.bootstrap"), rc, out, server_key), _server_card_markup(server_key, lang))
+            _wizard_edit(context, _action_result_text(t(lang, "admin.wizard.bootstrap"), rc, out, server_key, lang), _server_card_markup(server_key, lang))
             return
         if action == "reinstall":
             rc, out = reinstall_server(server_key, preserve_config=preserve_config)
             stop_progress()
-            _wizard_edit(context, _action_result_text(t(lang, "admin.wizard.reinstall"), rc, out, server_key), _server_card_markup(server_key, lang))
+            _wizard_edit(context, _action_result_text(t(lang, "admin.wizard.reinstall"), rc, out, server_key, lang), _server_card_markup(server_key, lang))
             return
         if action == "delete":
             rc, out = delete_server_runtime(server_key, preserve_config=preserve_config)
             stop_progress()
-            _wizard_edit(context, _action_result_text(t(lang, "admin.wizard.delete_runtime"), rc, out, server_key), _server_card_markup(server_key, lang))
+            _wizard_edit(context, _action_result_text(t(lang, "admin.wizard.delete_runtime"), rc, out, server_key, lang), _server_card_markup(server_key, lang))
             return
         stop_progress()
 
@@ -1226,55 +1267,55 @@ def on_server_callback(update: Update, context: CallbackContext, payload: str) -
             stop_progress = _start_progress_animation(context, t(lang, "admin.wizard.probe"))
             rc, out = probe_server(server_key)
             stop_progress()
-            _wizard_edit(context, _action_result_text(t(lang, "admin.wizard.probe"), rc, out, server_key), _server_card_markup(server_key, lang))
+            _wizard_edit(context, _action_result_text(t(lang, "admin.wizard.probe"), rc, out, server_key, lang), _server_card_markup(server_key, lang))
             return
         if action == "checkports":
             stop_progress = _start_progress_animation(context, t(lang, "admin.wizard.check_ports"))
             rc, out = check_server_ports(server_key)
             stop_progress()
-            _wizard_edit(context, _action_result_text(t(lang, "admin.wizard.check_ports"), rc, out, server_key), _server_card_markup(server_key, lang))
+            _wizard_edit(context, _action_result_text(t(lang, "admin.wizard.check_ports"), rc, out, server_key, lang), _server_card_markup(server_key, lang))
             return
         if action == "openports":
             stop_progress = _start_progress_animation(context, t(lang, "admin.wizard.open_ports"))
             rc, out = open_server_ports(server_key)
             stop_progress()
-            _wizard_edit(context, _action_result_text(t(lang, "admin.wizard.open_ports"), rc, out, server_key), _server_card_markup(server_key, lang))
+            _wizard_edit(context, _action_result_text(t(lang, "admin.wizard.open_ports"), rc, out, server_key, lang), _server_card_markup(server_key, lang))
             return
         if action == "installdocker":
             stop_progress = _start_progress_animation(context, t(lang, "admin.wizard.install_docker"))
             rc, out = install_server_docker(server_key)
             stop_progress()
-            _wizard_edit(context, _action_result_text(t(lang, "admin.wizard.install_docker"), rc, out, server_key), _server_card_markup(server_key, lang))
+            _wizard_edit(context, _action_result_text(t(lang, "admin.wizard.install_docker"), rc, out, server_key, lang), _server_card_markup(server_key, lang))
             return
         if action == "syncenv":
             stop_progress = _start_progress_animation(context, t(lang, "admin.wizard.sync_env"))
             rc, out = sync_server_node_env(server_key)
             stop_progress()
-            _wizard_edit(context, _action_result_text(t(lang, "admin.wizard.sync_env"), rc, out, server_key), _server_card_markup(server_key, lang))
+            _wizard_edit(context, _action_result_text(t(lang, "admin.wizard.sync_env"), rc, out, server_key, lang), _server_card_markup(server_key, lang))
             return
         if action == "syncxray":
             stop_progress = _start_progress_animation(context, t(lang, "admin.wizard.sync_xray"))
             rc, out = sync_xray_server_settings(server_key)
             stop_progress()
-            _wizard_edit(context, _action_result_text(t(lang, "admin.wizard.sync_xray"), rc, out, server_key), _server_card_markup(server_key, lang))
+            _wizard_edit(context, _action_result_text(t(lang, "admin.wizard.sync_xray"), rc, out, server_key, lang), _server_card_markup(server_key, lang))
             return
         if action == "awgentropy":
             stop_progress = _start_progress_animation(context, t(lang, "admin.wizard.awg_entropy"))
             rc, out = show_awg_entropy(server_key)
             stop_progress()
-            _wizard_edit(context, _action_result_text(t(lang, "admin.wizard.awg_entropy"), rc, out, server_key), _server_card_markup(server_key, lang))
+            _wizard_edit(context, _action_result_text(t(lang, "admin.wizard.awg_entropy"), rc, out, server_key, lang), _server_card_markup(server_key, lang))
             return
         if action == "awgregen":
             stop_progress = _start_progress_animation(context, t(lang, "admin.wizard.awg_regen_entropy"))
             rc, out = regenerate_awg_entropy(server_key)
             stop_progress()
-            _wizard_edit(context, _action_result_text(t(lang, "admin.wizard.awg_regen_entropy"), rc, out, server_key), _server_card_markup(server_key, lang))
+            _wizard_edit(context, _action_result_text(t(lang, "admin.wizard.awg_regen_entropy"), rc, out, server_key, lang), _server_card_markup(server_key, lang))
             return
         if action == "reconcile":
             stop_progress = _start_progress_animation(context, t(lang, "admin.wizard.reconcile"))
             rc, out = reconcile_xray_server_state(server_key)
             stop_progress()
-            _wizard_edit(context, _action_result_text(t(lang, "admin.wizard.reconcile"), rc, out, server_key), _server_card_markup(server_key, lang))
+            _wizard_edit(context, _action_result_text(t(lang, "admin.wizard.reconcile"), rc, out, server_key, lang), _server_card_markup(server_key, lang))
             return
 
     if payload.startswith("transport:"):
