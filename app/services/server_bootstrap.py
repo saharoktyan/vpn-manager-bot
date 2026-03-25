@@ -1786,13 +1786,7 @@ echo "WARNING: client AWG configs must be reissued after entropy regeneration."
 """
 
 
-AWG_DOCKERFILE = """FROM amneziavpn/amneziawg-go:latest
-
-LABEL maintainer="AmneziaVPN"
-
-RUN mkdir -p /opt/amnezia
-RUN cat > /opt/amnezia/start.sh <<'EOF'
-#!/bin/sh
+AWG_START_SCRIPT = """#!/bin/sh
 set -eu
 
 IFACE="${AWG_IFACE:-wg0}"
@@ -1925,7 +1919,15 @@ setup_nat
 echo "AWG runtime ready: iface=$IFACE pub_iface=${PUB_IFACE:-none}"
 
 exec sh -c 'while :; do sleep 3600; done'
-EOF
+"""
+
+
+AWG_DOCKERFILE = """FROM amneziavpn/amneziawg-go:latest
+
+LABEL maintainer="AmneziaVPN"
+
+RUN mkdir -p /opt/amnezia
+COPY start.sh /opt/amnezia/start.sh
 RUN chmod a+x /opt/amnezia/start.sh
 
 RUN echo -e " \\n\\
@@ -2747,6 +2749,7 @@ def bootstrap_server(server_key: str, preserve_config: bool = False) -> Tuple[in
         "/opt/vpn-manager-node/init-awg.sh": (AWG_INIT_SCRIPT, "0755"),
         "/opt/vpn-manager-node/regenerate-awg-entropy.sh": (AWG_REGENERATE_ENTROPY_SCRIPT, "0755"),
         "/opt/vpn-manager-node/amnezia-awg/Dockerfile": (AWG_DOCKERFILE, "0644"),
+        "/opt/vpn-manager-node/amnezia-awg/start.sh": (AWG_START_SCRIPT, "0755"),
         "/opt/vpn-manager-node/deploy-awg.sh": (AWG_DEPLOY_SCRIPT, "0755"),
     }
     file_rc, file_out = write_server_files(server, files, timeout=180)
