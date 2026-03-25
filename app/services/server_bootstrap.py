@@ -515,7 +515,7 @@ config = {
                     "privateKey": "${PRIVATE_KEY}",
                     "shortIds": ["${SHORT_ID}"],
                 },
-                "xhttpSettings": {"path": f"${PATH_PREFIX}/${SHORT_ID}"},
+                "xhttpSettings": {"path": "${PATH_PREFIX}"},
             },
         },
     ],
@@ -912,7 +912,7 @@ print(json.dumps({
     "xray_short_id": short_ids[0] if short_ids else "",
     "xray_tcp_port": int(tcp.get("port") or 443),
     "xray_xhttp_port": int(xhttp.get("port") or 8443),
-    "xray_xhttp_path_prefix": path_prefix.rsplit("/", 1)[0] if "/" in path_prefix else path_prefix,
+    "xray_xhttp_path_prefix": path_prefix,
     "xray_flow": flow,
     "xray_fp": "chrome",
 }))

@@ -1037,8 +1037,8 @@ def on_menu_callback(update: Update, context: CallbackContext, payload: str) -> 
         left_txt = "♾"
         exp_txt = "♾"
         if expires_at:
-            left_txt = _human_left(expires_at)
-            exp_txt = f"до `{expires_at}`"
+            left_txt = _human_left(expires_at, lang)
+            exp_txt = t(lang, "profile.expires_at_value", value=expires_at)
 
         uuid_val = prof.get("uuid") if isinstance(prof, dict) else None
         frozen_flag = t(lang, "profile.frozen_yes") if st.get("frozen") else t(lang, "profile.frozen_no")
@@ -1058,9 +1058,9 @@ def on_menu_callback(update: Update, context: CallbackContext, payload: str) -> 
         u_rec = u_db.get(str(user.id)) if isinstance(u_db, dict) else None
         last_key_at = u_rec.get("last_key_at") if isinstance(u_rec, dict) else None
         key_cnt = u_rec.get("key_issued_count") if isinstance(u_rec, dict) else 0
-        last_key_txt = _human_ago(last_key_at) if last_key_at else "—"
+        last_key_txt = _human_ago(last_key_at, lang) if last_key_at else "—"
         username_text = _format_username(str(user.username or ""), lang)
-        created_txt = _human_ago(created_at) if created_at else "—"
+        created_txt = _human_ago(created_at, lang) if created_at else "—"
         traffic_block = ""
         if is_global_telemetry_enabled():
             if _user_telemetry_enabled(user.id):

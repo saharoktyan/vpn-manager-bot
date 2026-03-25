@@ -29,7 +29,7 @@ def _parse_iso(dt_str: str):
         return None
 
 
-def _human_ago(iso: str) -> str:
+def _human_ago(iso: str, lang: str = "ru") -> str:
     dt = _parse_iso(iso)
     if not dt:
         return "—"
@@ -42,12 +42,12 @@ def _human_ago(iso: str) -> str:
         sec = 0
 
     if sec < 60:
-        return f"{sec} сек назад"
+        return f"{sec} сек назад" if lang == "ru" else f"{sec} sec ago"
     if sec < 3600:
-        return f"{sec // 60} мин назад"
+        return f"{sec // 60} мин назад" if lang == "ru" else f"{sec // 60} min ago"
     if sec < 86400:
-        return f"{sec // 3600} ч назад"
-    return f"{sec // 86400} дн назад"
+        return f"{sec // 3600} ч назад" if lang == "ru" else f"{sec // 3600} h ago"
+    return f"{sec // 86400} дн назад" if lang == "ru" else f"{sec // 86400} d ago"
 
 
 def _progress_bar(p: float, width: int = 10) -> str:
@@ -78,7 +78,7 @@ def _sub_progress(created_iso: str, expires_iso: str) -> tuple[str, str]:
     return _progress_bar(p, 10), f"{int(round(p * 100))}%"
 
 
-def _human_left(exp_iso: str) -> str:
+def _human_left(exp_iso: str, lang: str = "ru") -> str:
     dt = _parse_iso(exp_iso)
     if not dt:
         return "—"
@@ -87,13 +87,13 @@ def _human_left(exp_iso: str) -> str:
         dt = dt.replace(tzinfo=timezone.utc)
     sec = int((dt - now).total_seconds())
     if sec <= 0:
-        return "истекла"
+        return "истекла" if lang == "ru" else "expired"
     days = sec // 86400
     hrs = (sec % 86400) // 3600
     if days > 0:
-        return f"{days} дн {hrs} ч"
+        return f"{days} дн {hrs} ч" if lang == "ru" else f"{days} d {hrs} h"
     mins = (sec % 3600) // 60
-    return f"{hrs} ч {mins} мин"
+    return f"{hrs} ч {mins} мин" if lang == "ru" else f"{hrs} h {mins} min"
 
 
 def _conf_msg_key(server_key: str) -> str:

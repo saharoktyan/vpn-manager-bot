@@ -578,7 +578,7 @@ def on_cfg_callback(update: Update, context: CallbackContext, payload: str) -> N
             return
         if act == "reconcile":
             code, out = reconcile_profile_state(name)
-            prefix = ("🔄 Сверка состояния" if lang == "ru" else "🔄 Reconcile state")
+            prefix = t(lang, "admin.wizard.reconcile_state_title")
             text = f"{prefix}\n\n{out}"
             if code != 0:
                 text = f"⚠️ {prefix}\n\n{out}"
@@ -693,7 +693,7 @@ def _finish_create(context: CallbackContext) -> None:
         code, out, ensured_uuid, ensured_short_id = xray_svc.ensure_user(name, method.server_key, uuid_value=uuid_val)
         if code != 0 or not ensured_uuid:
             xray_state_updates.append(("failed", method.server_key, uuid_val, (out or "")[-500:] or "create failed"))
-            errors.append(f"{method.label}: ошибка создания\n{(out or '')[-500:]}")
+            errors.append(f"{method.label}: {t(lang, 'admin.wizard.create_error_line')}\n{(out or '')[-500:]}")
             continue
         uuid_val = ensured_uuid
         if ensured_short_id:
@@ -705,7 +705,7 @@ def _finish_create(context: CallbackContext) -> None:
             msgs.append(f"{method.label}: ✅")
         else:
             xray_state_updates.append(("needs_attention", method.server_key, ensured_uuid, reason))
-            errors.append(f"{method.label}: профиль создан, но сервер не готов к выдаче ссылки\n{reason}")
+            errors.append(f"{method.label}: {t(lang, 'admin.wizard.link_not_ready_line')}\n{reason}")
     if uuid_val:
         ensure_xray_caps(name, uuid_val)
 
@@ -762,9 +762,9 @@ def _finish_create(context: CallbackContext) -> None:
         upsert_profile_server_state(name, awg_method.server_key, "awg", status="provisioned", last_error=None)
         msgs.append(f"{awg_method.label}: ✅")
 
-    lines = [f"Профиль {name} создан/обновлён:"] + [f"- {msg}" for msg in msgs]
+    lines = [t(lang, "admin.wizard.profile_created_updated", name=name)] + [f"- {msg}" for msg in msgs]
     if errors:
-        lines.append("\nОшибки:")
+        lines.append(f"\n{t(lang, 'admin.wizard.errors')}")
         lines.extend(f"• {err}" for err in errors)
 
     names = _get_all_names()
@@ -775,7 +775,7 @@ def _finish_create(context: CallbackContext) -> None:
     stop_progress()
     _wizard_edit_plain(
         context,
-        "\n".join(lines) + "\n\nНиже можно выбрать следующий профиль.",
+        "\n".join(lines) + "\n\n" + t(lang, "admin.wizard.next_profile_hint"),
         _render_profile_dashboard(names, 0, _wizard_lang(context))[1] if names else kb_back_menu(_wizard_lang(context)),
     )
 
@@ -827,7 +827,7 @@ def _save_edit(context: CallbackContext) -> None:
                 remote_id=uuid_val,
                 last_error=(out or "")[-500:] or "sync failed",
             )
-            errors.append(f"{method.label}: не удалось синхронизировать\n{(out or '')[-500:]}")
+            errors.append(f"{method.label}: {t(lang, 'admin.wizard.sync_failed_line')}\n{(out or '')[-500:]}")
             continue
         uuid_val = ensured_uuid
         if ensured_short_id:
@@ -843,7 +843,7 @@ def _save_edit(context: CallbackContext) -> None:
                 remote_id=ensured_uuid,
                 last_error=None,
             )
-            messages.append(f"{method.label}: синхронизирован")
+            messages.append(f"{method.label}: {t(lang, 'admin.wizard.synced_line')}")
         else:
             upsert_profile_server_state(
                 name,
@@ -853,7 +853,7 @@ def _save_edit(context: CallbackContext) -> None:
                 remote_id=ensured_uuid,
                 last_error=reason,
             )
-            errors.append(f"{method.label}: профиль есть, но сервер не готов к выдаче ссылки\n{reason}")
+            errors.append(f"{method.label}: {t(lang, 'admin.wizard.link_not_ready_line')}\n{reason}")
 
     if uuid_val:
         for removed_server_key in existing_xray_server_keys - selected_xray_server_keys:
@@ -879,10 +879,10 @@ def _save_edit(context: CallbackContext) -> None:
                 remote_id=uuid_val,
                 last_error="delete failed",
             )
-            errors.append(f"Xray {server_key}: не удалось удалить профиль")
+            errors.append(f"Xray {server_key}: {t(lang, 'admin.wizard.delete_failed_line')}")
         else:
             delete_profile_server_state(name, server_key, "xray")
-            messages.append(f"Xray {server_key}: удалён")
+            messages.append(f"Xray {server_key}: {t(lang, 'admin.wizard.deleted_line')}")
 
     subs[name] = rec
     subs_store.write(subs)
@@ -914,7 +914,7 @@ def _save_edit(context: CallbackContext) -> None:
             created_at=utcnow().isoformat(timespec="minutes"),
         )
         upsert_profile_server_state(name, method.server_key, "awg", status="provisioned", last_error=None)
-        messages.append(f"{method.label}: создан")
+        messages.append(f"{method.label}: {t(lang, 'admin.wizard.created_line')}")
 
     for server_key in sorted(existing_server_keys - selected_server_keys):
         code, _out = delete_awg_user(server_key, name)
@@ -926,20 +926,20 @@ def _save_edit(context: CallbackContext) -> None:
                 status="failed",
                 last_error="delete failed",
             )
-            errors.append(f"AWG {server_key}: не удалось удалить с сервера")
+            errors.append(f"AWG {server_key}: {t(lang, 'admin.wizard.delete_failed_line')}")
             continue
         remove_awg_server(name, server_key)
         delete_profile_server_state(name, server_key, "awg")
-        messages.append(f"AWG {server_key}: удалён")
+        messages.append(f"AWG {server_key}: {t(lang, 'admin.wizard.deleted_line')}")
 
     text, markup = _render_edit_menu(name, protocols, sub_days, frozen=is_frozen(name))
-    prefix = "Сохранено."
+    prefix = t(lang, "admin.wizard.profile_saved")
     if messages:
         prefix += "\n" + "\n".join(f"- {msg}" for msg in messages)
     if errors:
         plain_text = (
             prefix
-            + "\n\nОшибки:\n"
+            + f"\n\n{t(lang, 'admin.wizard.errors')}\n"
             + "\n".join(f"• {err}" for err in errors)
             + "\n\n"
             + text.replace("*", "").replace("`", "")

@@ -705,6 +705,44 @@ def _localize_action_output(out: str, lang: str) -> str:
         body = body.replace(missing_block_ru, t(lang, "admin.wizard.docker_missing_block"))
     if sudo_block_ru in body:
         body = body.replace(sudo_block_ru, t(lang, "admin.wizard.docker_sudo_block"))
+    if lang == "en":
+        replacements = [
+            ("Сводка по портам:", "Port summary:"),
+            ("используется управляемым рантаймом", "managed runtime"),
+            ("свободен", "free"),
+            ("занят", "busy"),
+            ("открыт в firewall", "firewall open"),
+            ("закрыт в firewall", "firewall closed"),
+            ("рекомендуемый порт", "suggested port"),
+            ("Проверка портов пропущена", "Port check skipped"),
+            ("Файл node.env записан в /etc/vpn-bot/node.env", "node.env has been written to /etc/vpn-bot/node.env"),
+            ("Правила firewall обновлены.", "Firewall rules updated."),
+            ("Открыты правила firewall:", "Opened firewall rules:"),
+            ("Для этого сервера нет управляемых портов", "There are no managed ports for this server"),
+            ("пользователь:", "user:"),
+            ("ядро:", "kernel:"),
+            ("docker: доступен через sudo", "docker: available via sudo"),
+            ("docker: доступен", "docker: available"),
+            ("docker: недоступен", "docker: unavailable"),
+            ("tun: доступен", "tun: available"),
+            ("tun: отсутствует", "tun: missing"),
+            ("awg_userspace_ready: да", "awg_userspace_ready: yes"),
+            ("awg_userspace_ready: нет", "awg_userspace_ready: no"),
+            ("Bootstrap завершён.", "Bootstrap completed."),
+            ("Рабочий node.env записан в /etc/vpn-bot/node.env.", "Working node.env has been written to /etc/vpn-bot/node.env."),
+            ("Установлены базовые пакеты и служебные скрипты", "Base packages and helper scripts installed"),
+            ("Конфиг Xray сохранён, рантайм развёрнут заново", "Xray config preserved, runtime redeployed"),
+            ("Настройки Xray сгенерированы, рантайм развёрнут", "Xray settings generated, runtime deployed"),
+            ("Конфиг AWG сохранён, рантайм развёрнут заново", "AWG config preserved, runtime redeployed"),
+            ("Рантайм AWG развёрнут", "AWG runtime deployed"),
+            ("Режим переустановки: с сохранением существующего конфига.", "Reinstall mode: keep existing config."),
+            ("Режим переустановки: чистая переустановка.", "Reinstall mode: clean reinstall."),
+            ("Рантайм удалён.", "Runtime removed."),
+            ("Существующие конфиги сохранены.", "Existing configs preserved."),
+            ("Конфиги и директории рантайма удалены.", "Runtime configs and directories removed."),
+        ]
+        for src, dst in replacements:
+            body = body.replace(src, dst)
     return body
 
 

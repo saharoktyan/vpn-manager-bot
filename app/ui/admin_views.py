@@ -53,7 +53,7 @@ def render_protocols_summary(protocols: Set[str]) -> str:
 
 def render_protocol_select_text(name: str, selected: Set[str], editing: bool = False, lang: str = "ru") -> str:
     summary = render_protocols_summary(selected)
-    action = "Измени" if editing and lang == "ru" else "Выбери" if lang == "ru" else "Update" if editing else "Choose"
+    action = "Измени" if (editing and lang == "ru") else "Выбери" if lang == "ru" else "Update" if editing else "Choose"
     profile_label = "Профиль" if lang == "ru" else "Profile"
     choose_text = "серверы и способы подключения" if lang == "ru" else "servers and connection methods"
     current_label = "Текущий выбор" if lang == "ru" else "Current selection"
@@ -139,8 +139,8 @@ def render_profile_dashboard(names: List[str], page: int, lang: str = "ru") -> T
 def render_edit_menu(name: str, protocols: Set[str], sub_days: Optional[int], frozen: bool, lang: str = "ru") -> Tuple[str, InlineKeyboardMarkup]:
     proto_txt = render_protocols_summary(protocols)
     state_txt = render_profile_server_state_summary(name, lang)
-    sub_txt = "♾ бессрочная" if sub_days is None else f"{sub_days} дн." if lang == "ru" else "♾ lifetime" if sub_days is None else f"{sub_days} d."
-    fr = "🧊 заморожен" if frozen and lang == "ru" else "✅ активен" if lang == "ru" else "🧊 frozen" if frozen else "✅ active"
+    sub_txt = ("♾ бессрочная" if sub_days is None else f"{sub_days} дн.") if lang == "ru" else ("♾ lifetime" if sub_days is None else f"{sub_days} d.")
+    fr = ("🧊 заморожен" if frozen else "✅ активен") if lang == "ru" else ("🧊 frozen" if frozen else "✅ active")
     title = "✏️ Редактирование" if lang == "ru" else "✏️ Edit"
     access = "Доступ" if lang == "ru" else "Access"
     provision = "Применение" if lang == "ru" else "Provisioning"
@@ -175,23 +175,19 @@ def render_edit_menu(name: str, protocols: Set[str], sub_days: Optional[int], fr
 
 
 def render_status_menu(name: str, frozen: bool, lang: str = "ru") -> Tuple[str, InlineKeyboardMarkup]:
-    text = (
-        f"🧊 Статус профиля: `{name}`\n\n"
-        f"Сейчас: *{'заморожен' if frozen else 'активен'}*\n\n"
-        "Выбери действие:"
-        if lang == "ru"
-        else
-        f"🧊 Profile status: `{name}`\n\n"
-        f"Current: *{'frozen' if frozen else 'active'}*\n\n"
-        "Choose an action:"
-    )
+    if lang == "ru":
+        text = f"🧊 Статус профиля: `{name}`\n\nСейчас: *{'заморожен' if frozen else 'активен'}*\n\nВыбери действие:"
+        action_label = "🔥 Разморозить" if frozen else "🧊 Заморозить"
+    else:
+        text = f"🧊 Profile status: `{name}`\n\nCurrent: *{'frozen' if frozen else 'active'}*\n\nChoose an action:"
+        action_label = "🔥 Unfreeze" if frozen else "🧊 Freeze"
     return (
         text,
         InlineKeyboardMarkup(
             [
                 [
                     InlineKeyboardButton(
-                        "🔥 Unfreeze" if frozen else "🧊 Freeze",
+                        action_label,
                         callback_data=f"{CB_CFG}edit:unfreeze" if frozen else f"{CB_CFG}edit:freeze",
                     ),
                 ],
@@ -233,8 +229,8 @@ def render_delete_confirm(name: str, lang: str = "ru") -> Tuple[str, InlineKeybo
 def render_profile_card(name: str, protocols: Set[str], sub_days: Optional[int], frozen: bool, lang: str = "ru") -> Tuple[str, InlineKeyboardMarkup]:
     proto_txt = render_protocols_summary(protocols)
     state_txt = render_profile_server_state_summary(name, lang)
-    sub_txt = "♾ бессрочная" if sub_days is None else f"{sub_days} дн." if lang == "ru" else "♾ lifetime" if sub_days is None else f"{sub_days} d."
-    fr = "🧊 заморожен" if frozen and lang == "ru" else "✅ активен" if lang == "ru" else "🧊 frozen" if frozen else "✅ active"
+    sub_txt = ("♾ бессрочная" if sub_days is None else f"{sub_days} дн.") if lang == "ru" else ("♾ lifetime" if sub_days is None else f"{sub_days} d.")
+    fr = ("🧊 заморожен" if frozen else "✅ активен") if lang == "ru" else ("🧊 frozen" if frozen else "✅ active")
     access = "Доступ" if lang == "ru" else "Access"
     provision = "Применение" if lang == "ru" else "Provisioning"
     sub = "Подписка" if lang == "ru" else "Subscription"

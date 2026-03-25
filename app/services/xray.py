@@ -280,8 +280,7 @@ def build_vless_link_transport(name: str, uuid: str, transport: str, server_key:
     path_prefix = server.xray_xhttp_path_prefix or "/assets"
 
     if transport == "xhttp":
-        suffix = f"{path_prefix}/{short_id}".rstrip("/")
-        path = quote(suffix if suffix else path_prefix, safe="")
+        path = quote(path_prefix, safe="")
         return (
             f"vless://{uuid}@{server.xray_host}:{server.xray_xhttp_port}"
             f"?encryption=none"
