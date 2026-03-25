@@ -2034,7 +2034,7 @@ if lsmod | grep -q '^amneziawg '; then
 fi
 
 mkdir -p "$DOCKER_DIR/data"
-docker_cmd build -t "$IMAGE" "$DOCKER_DIR"
+docker_cmd build --no-cache -t "$IMAGE" "$DOCKER_DIR"
 
 if docker_cmd ps -a --format '{{.Names}}' | grep -q "^${CONTAINER}$"; then
   docker_cmd rm -f "$CONTAINER" >/dev/null
