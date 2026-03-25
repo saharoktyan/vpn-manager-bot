@@ -18,6 +18,8 @@ from services.server_bootstrap import (
     bootstrap_server,
     check_server_ports,
     delete_server_runtime,
+    install_server_docker,
+    is_server_docker_available,
     open_server_ports,
     probe_server,
     regenerate_awg_entropy,
@@ -410,17 +412,19 @@ def _bootstrap_menu_text(server: RegisteredServer, lang: str) -> str:
 
 def _bootstrap_menu_markup(server: RegisteredServer, lang: str) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]]
+    if not is_server_docker_available(server.key):
+        rows = [[InlineKeyboardButton(t(lang, "admin.wizard.install_docker"), callback_data=f"{CB_SRV}action:installdocker:{server.key}")]]
+    else:
+        rows = []
     if server.bootstrap_state == "bootstrapped":
-        rows = [
+        rows.append(
             [
                 InlineKeyboardButton(t(lang, "admin.wizard.reinstall"), callback_data=f"{CB_SRV}bootmode:reinstall:{server.key}"),
                 InlineKeyboardButton(t(lang, "admin.wizard.delete_runtime"), callback_data=f"{CB_SRV}bootmode:delete:{server.key}"),
             ],
-        ]
+        )
     else:
-        rows = [
-            [InlineKeyboardButton(t(lang, "admin.wizard.bootstrap"), callback_data=f"{CB_SRV}bootmode:bootstrap:{server.key}")],
-        ]
+        rows.append([InlineKeyboardButton(t(lang, "admin.wizard.bootstrap"), callback_data=f"{CB_SRV}bootmode:bootstrap:{server.key}")])
     rows.append([InlineKeyboardButton(t(lang, "admin.wizard.back_to_server"), callback_data=f"{CB_SRV}card:{server.key}")])
     return InlineKeyboardMarkup(rows)
 
@@ -1235,6 +1239,12 @@ def on_server_callback(update: Update, context: CallbackContext, payload: str) -
             rc, out = open_server_ports(server_key)
             stop_progress()
             _wizard_edit(context, _action_result_text(t(lang, "admin.wizard.open_ports"), rc, out, server_key), _server_card_markup(server_key, lang))
+            return
+        if action == "installdocker":
+            stop_progress = _start_progress_animation(context, t(lang, "admin.wizard.install_docker"))
+            rc, out = install_server_docker(server_key)
+            stop_progress()
+            _wizard_edit(context, _action_result_text(t(lang, "admin.wizard.install_docker"), rc, out, server_key), _server_card_markup(server_key, lang))
             return
         if action == "syncenv":
             stop_progress = _start_progress_animation(context, t(lang, "admin.wizard.sync_env"))

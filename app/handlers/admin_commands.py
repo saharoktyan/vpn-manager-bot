@@ -13,6 +13,7 @@ from services.server_bootstrap import bootstrap_server, probe_server, sync_xray_
 from services.server_registry import list_servers, update_server_fields, upsert_server
 from services.ssh_keys import render_public_key_guide
 from services.traffic_usage import debug_awg_traffic_report, debug_profile_traffic_report, run_collect_traffic_once
+from services.xray import debug_xray_telemetry_report
 from services import xray as xray_svc
 from services.subscriptions import ensure_xray_caps, subs_store, utcnow
 from config import APP_VERSION
@@ -272,6 +273,22 @@ def diag_cmd(update: Update, context: CallbackContext) -> None:
         return
     lang = get_locale_for_update(update)
     parts = (update.effective_message.text or "").strip().split()
+    if len(parts) >= 3 and parts[1].lower() == "xray":
+        server_key = parts[2]
+        code, out = debug_xray_telemetry_report(server_key)
+        if code != 0:
+            update.effective_message.reply_text(
+                t(lang, "admin.cmd.xray_diag_error", output=out[-3000:]),
+                parse_mode=PARSE_MODE,
+                reply_markup=kb_back_menu(lang),
+            )
+            return
+        update.effective_message.reply_text(
+            t(lang, "admin.cmd.xray_diag_ok", server=server_key, output=out[-3500:]),
+            parse_mode=PARSE_MODE,
+            reply_markup=kb_back_menu(lang),
+        )
+        return
     if len(parts) >= 3 and parts[1].lower() == "awg":
         server_key = parts[2]
         code, out = debug_awg_traffic_report(server_key)

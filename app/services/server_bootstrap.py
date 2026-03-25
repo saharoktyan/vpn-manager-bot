@@ -24,6 +24,49 @@ def _extract_last_json_object(text: str) -> dict:
     return json.loads(match.group(1))
 
 
+def _docker_status(server: RegisteredServer) -> tuple[bool, str]:
+    rc, out = run_server_command(
+        server,
+        """#!/usr/bin/env bash
+set -euo pipefail
+if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
+  echo "available"
+elif command -v sudo >/dev/null 2>&1 && sudo docker info >/dev/null 2>&1; then
+  echo "available_via_sudo"
+else
+  echo "missing"
+fi
+""",
+        timeout=30,
+    )
+    status = (out or "").strip().splitlines()[-1].strip() if (out or "").strip() else "missing"
+    return (rc == 0 and status in {"available", "available_via_sudo"}, status)
+
+
+def _docker_install_suggestion(status: str, details: str = "") -> str:
+    parts = [
+        "Docker недоступен на сервере.",
+        "",
+        "Bootstrap не может продолжиться без рабочего Docker.",
+        "Установи и запусти Docker, затем повтори Probe или Bootstrap.",
+        "",
+        "Рекомендуемые команды:",
+        "apt-get update",
+        "apt-get install -y docker.io",
+        "apt-cache show docker-compose-plugin >/dev/null 2>&1 && apt-get install -y docker-compose-plugin || true",
+        "systemctl enable --now docker || service docker start",
+    ]
+    if status == "available_via_sudo":
+        parts = [
+            "Docker доступен только через sudo.",
+            "",
+            "Для bootstrap это обычно нормально, но если на сервере дальше возникают ошибки доступа к Docker, проверь права пользователя или группу docker.",
+        ]
+    if details.strip():
+        parts.extend(["", "Технические детали:", details.strip()[-1200:]])
+    return "\n".join(parts)
+
+
 NODE_ENV_EXAMPLE = """# Xray
 XRAY_CONFIG=/opt/vpn-manager-node/xray/config.json
 XRAY_CONTAINER_NAME=xray
@@ -669,6 +712,7 @@ set -euo pipefail
 source /etc/vpn-bot/node.env
 
 CONTAINER="${XRAY_CONTAINER_NAME:-xray}"
+CONFIG="${XRAY_CONFIG:-/opt/vpn-manager-node/xray/config.json}"
 
 docker_cmd() {
   if docker info >/dev/null 2>&1; then
@@ -683,10 +727,77 @@ docker_cmd() {
   exit 1
 }
 
-RAW="$(docker_cmd exec -i "$CONTAINER" sh -lc 'xray api statsquery --server=127.0.0.1:10085 2>/dev/null || /usr/bin/xray api statsquery --server=127.0.0.1:10085 2>/dev/null')" || {
-  echo "xray statsquery failed" >&2
+if ! docker_cmd inspect "$CONTAINER" >/dev/null 2>&1; then
+  echo "xray telemetry failed: container '$CONTAINER' not found" >&2
   exit 1
-}
+fi
+
+if [[ "$(docker_cmd inspect -f '{{.State.Running}}' "$CONTAINER" 2>/dev/null || echo false)" != "true" ]]; then
+  echo "xray telemetry failed: container '$CONTAINER' is not running" >&2
+  exit 1
+fi
+
+CONFIG_SUMMARY="$(CONFIG_ENV="$CONFIG" python3 - <<'PY'
+import json
+import os
+
+cfg_path = os.environ["CONFIG_ENV"]
+try:
+    cfg = json.load(open(cfg_path, "r", encoding="utf-8"))
+except Exception as exc:
+    print(f"config_read_error={exc}")
+    raise SystemExit(0)
+
+api = cfg.get("api") or {}
+services = list(api.get("services") or [])
+policy = (cfg.get("policy") or {}).get("levels") or {}
+level0 = policy.get("0") or {}
+has_api_inbound = any((ib.get("tag") == "api") for ib in (cfg.get("inbounds") or []))
+has_api_route = any(
+    rule.get("outboundTag") == "api" and "api" in (rule.get("inboundTag") or [])
+    for rule in ((cfg.get("routing") or {}).get("rules") or [])
+)
+
+print(
+    "stats="
+    + ("yes" if isinstance(cfg.get("stats"), dict) else "no")
+    + ", api_tag="
+    + str(api.get("tag") or "—")
+    + ", services="
+    + ",".join(services or ["—"])
+    + ", uplink="
+    + ("yes" if level0.get("statsUserUplink") is True else "no")
+    + ", downlink="
+    + ("yes" if level0.get("statsUserDownlink") is True else "no")
+    + ", api_inbound="
+    + ("yes" if has_api_inbound else "no")
+    + ", api_route="
+    + ("yes" if has_api_route else "no")
+)
+PY
+)"
+
+set +e
+RAW="$(docker_cmd exec -i "$CONTAINER" sh -lc '
+set -u
+XRAY_BIN="$(command -v xray 2>/dev/null || true)"
+if [ -z "$XRAY_BIN" ] && [ -x /usr/local/bin/xray ]; then XRAY_BIN=/usr/local/bin/xray; fi
+if [ -z "$XRAY_BIN" ] && [ -x /usr/bin/xray ]; then XRAY_BIN=/usr/bin/xray; fi
+if [ -z "$XRAY_BIN" ]; then
+  echo "xray binary not found in container" >&2
+  exit 11
+fi
+"$XRAY_BIN" api statsquery --server=127.0.0.1:10085 2>&1
+)")"
+rc=$?
+set -e
+if [ "$rc" -ne 0 ]; then
+  echo "xray telemetry failed: statsquery rc=$rc" >&2
+  echo "config: $CONFIG_SUMMARY" >&2
+  echo "output:" >&2
+  echo "$RAW" >&2
+  exit 1
+fi
 
 XRAY_STATS_RAW="$RAW" python3 - <<'PY'
 import json
@@ -1968,6 +2079,41 @@ touch /etc/vpn-bot/node.env
 """
 
 
+def _install_docker_script() -> str:
+    return """#!/usr/bin/env bash
+set -euo pipefail
+export DEBIAN_FRONTEND=noninteractive
+
+if ! command -v apt-get >/dev/null 2>&1; then
+  echo "На сервере нет apt-get. Автоустановка Docker поддерживается только для Debian/Ubuntu."
+  exit 1
+fi
+
+echo "Обновляю индекс пакетов..."
+apt-get update
+
+echo "Устанавливаю Docker..."
+apt-get install -y docker.io
+apt-cache show docker-compose-plugin >/dev/null 2>&1 && apt-get install -y docker-compose-plugin || true
+
+echo "Запускаю Docker..."
+systemctl enable --now docker >/dev/null 2>&1 || service docker start >/dev/null 2>&1 || true
+
+if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
+  echo "Docker установлен и доступен."
+  exit 0
+fi
+
+if command -v sudo >/dev/null 2>&1 && sudo docker info >/dev/null 2>&1; then
+  echo "Docker установлен и доступен через sudo."
+  exit 0
+fi
+
+echo "Docker установлен, но всё ещё недоступен для текущего пользователя."
+exit 1
+"""
+
+
 def _mark(server: RegisteredServer, state: str, notes: str = "") -> None:
     update_server_fields(server.key, bootstrap_state=state, notes=notes)
 
@@ -2434,6 +2580,7 @@ fi
     if rc == 0:
         lines = [line.strip() for line in (out or "").splitlines() if line.strip()]
         summary = []
+        docker_line = next((line for line in lines if line.startswith("docker:")), "")
         for prefix in ("docker:", "tun:", "awg_userspace_ready:"):
             hit = next((line for line in lines if line.startswith(prefix)), None)
             if hit:
@@ -2441,6 +2588,8 @@ fi
         port_rc, port_out = _check_server_ports(server)
         if port_out.strip():
             out = (out.rstrip() + "\n\n" + port_out.strip()).strip()
+        if docker_line == "docker: недоступен":
+            out = (out.rstrip() + "\n\n" + _docker_install_suggestion("missing")).strip()
         if port_rc != 0:
             summary.append("ports: conflict")
         if summary:
@@ -2451,6 +2600,37 @@ fi
         if port_rc != 0:
             return 1, out
     return rc, out
+
+
+def install_server_docker(server_key: str) -> Tuple[int, str]:
+    server = get_server(server_key)
+    if not server:
+        return 1, f"Сервер {server_key} не найден"
+
+    docker_ok, docker_status = _docker_status(server)
+    if docker_ok:
+        if docker_status == "available_via_sudo":
+            return 0, "Docker уже установлен и доступен через sudo."
+        return 0, "Docker уже установлен и доступен."
+
+    rc, out = run_server_command(server, _install_docker_script(), timeout=900)
+    docker_ok, docker_status = _docker_status(server)
+    if docker_ok:
+        suffix = "Docker установлен и доступен через sudo." if docker_status == "available_via_sudo" else "Docker установлен и готов к работе."
+        body = (out or "").strip()
+        return 0, f"{body}\n\n{suffix}".strip()
+
+    if rc != 0:
+        return rc, _docker_install_suggestion(docker_status, out)
+    return 1, _docker_install_suggestion(docker_status, out)
+
+
+def is_server_docker_available(server_key: str) -> bool:
+    server = get_server(server_key)
+    if not server:
+        return False
+    docker_ok, _ = _docker_status(server)
+    return docker_ok
 
 
 def sync_xray_server_settings(server_key: str) -> Tuple[int, str]:
@@ -2513,8 +2693,19 @@ def bootstrap_server(server_key: str, preserve_config: bool = False) -> Tuple[in
 
     rc, out = run_server_command(server, _packages_script(), timeout=600)
     if rc != 0:
+        docker_ok, docker_status = _docker_status(server)
+        if not docker_ok:
+            msg = _docker_install_suggestion(docker_status, out)
+            _mark(server, "bootstrap_failed", msg[-1500:])
+            return 1, msg
         _mark(server, "bootstrap_failed", out[-1500:])
         return rc, out
+
+    docker_ok, docker_status = _docker_status(server)
+    if not docker_ok:
+        msg = _docker_install_suggestion(docker_status, out)
+        _mark(server, "bootstrap_failed", msg[-1500:])
+        return 1, msg
 
     files = {
         "/etc/vpn-bot/node.env.example": (NODE_ENV_EXAMPLE, "0644"),

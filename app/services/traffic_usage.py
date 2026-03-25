@@ -9,6 +9,7 @@ from db.schema import ensure_schema
 from db.sqlite_db import SQLiteDB
 from services.app_settings import is_global_telemetry_enabled
 from services.awg import extract_client_public_key, list_awg_peer_transfers
+from domain.servers import get_access_methods_for_codes
 from services.server_registry import list_servers
 from services.xray import list_xray_user_transfers
 
@@ -140,32 +141,54 @@ def _collect_xray_server_samples(server_key: str) -> tuple[int, str]:
         for item in records
         if str(item.get("name") or "")
     }
+    stats_by_name_lower = {name.lower(): item for name, item in stats_by_name.items()}
     sampled_at = _now_iso()
     collected = 0
+    unmatched = 0
+    skipped_without_method = 0
 
     with _db.transaction() as conn:
         rows = conn.execute(
             """
-            SELECT DISTINCT ps.profile_name, xp.uuid
-            FROM profile_server_state ps
-            JOIN xray_profiles xp ON xp.profile_name = ps.profile_name
-            JOIN telegram_users tu ON tu.profile_name = ps.profile_name
-            WHERE ps.server_key = ?
-              AND ps.protocol_kind = 'xray'
-              AND ps.desired_enabled = 1
-              AND tu.telemetry_enabled = 1
-            ORDER BY ps.profile_name
+            SELECT
+                xp.profile_name,
+                xp.uuid,
+                GROUP_CONCAT(pam.access_code) AS access_codes
+            FROM xray_profiles xp
+            LEFT JOIN profile_access_methods pam ON pam.profile_name = xp.profile_name
+            WHERE EXISTS (
+                SELECT 1
+                FROM telegram_users tu
+                WHERE tu.profile_name = xp.profile_name
+                  AND tu.telemetry_enabled = 1
+            )
+            GROUP BY xp.profile_name, xp.uuid
+            ORDER BY xp.profile_name
             """,
-            (server_key,),
         ).fetchall()
 
         for row in rows:
             profile_name = str(row["profile_name"] or "")
             uuid_val = str(row["uuid"] or "")
+            access_codes = [
+                code.strip()
+                for code in str(row["access_codes"] or "").split(",")
+                if code.strip()
+            ]
             if not profile_name:
                 continue
-            item = stats_by_name.get(profile_name)
+            methods = get_access_methods_for_codes(access_codes)
+            if not any(method.protocol_kind == "xray" and method.server_key == server_key for method in methods):
+                skipped_without_method += 1
+                continue
+            item = (
+                stats_by_name.get(profile_name)
+                or stats_by_name_lower.get(profile_name.lower())
+                or (stats_by_name.get(uuid_val) if uuid_val else None)
+                or (stats_by_name_lower.get(uuid_val.lower()) if uuid_val else None)
+            )
             if not item:
+                unmatched += 1
                 continue
             conn.execute(
                 """
@@ -185,7 +208,13 @@ def _collect_xray_server_samples(server_key: str) -> tuple[int, str]:
             )
             collected += 1
 
-    return 0, f"server={server_key}\nsamples={collected}"
+    return (
+        0,
+        f"server={server_key}\n"
+        f"samples={collected}\n"
+        f"unmatched_stats={unmatched}\n"
+        f"skipped_without_method={skipped_without_method}",
+    )
 
 
 def collect_awg_traffic_samples() -> tuple[int, str]:

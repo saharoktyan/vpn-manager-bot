@@ -184,6 +184,39 @@ def list_xray_user_transfers(server_key: str) -> Tuple[int, List[dict[str, Any]]
     return 0, [item for item in items if isinstance(item, dict)], out
 
 
+def debug_xray_telemetry_report(server_key: str) -> Tuple[int, str]:
+    server = get_server(server_key)
+    if not server:
+        return 1, f"Server {server_key} not found"
+
+    lines: list[str] = [f"Xray telemetry debug: server={server_key}"]
+    code, out = ensure_xray_telemetry(server_key)
+    lines.append(f"ensure_telemetry_rc={code}")
+    if out:
+        lines.append("ensure_telemetry_output:")
+        lines.append(out[-1500:])
+
+    run_code, run_out = run_server_command(server, "/opt/vpn-manager-node/xray-list-traffic.sh", timeout=120)
+    lines.append(f"traffic_script_rc={run_code}")
+    if run_out:
+        lines.append("traffic_script_output:")
+        lines.append(run_out[-3000:])
+
+    parsed_code, records, _raw = list_xray_user_transfers(server_key)
+    lines.append(f"parsed_rc={parsed_code}")
+    lines.append(f"records={len(records)}")
+    if records:
+        lines.append("preview:")
+        for item in records[:10]:
+            lines.append(
+                f"- name={item.get('name')}, "
+                f"uplink={int(item.get('uplink_bytes_total') or 0)}, "
+                f"downlink={int(item.get('downlink_bytes_total') or 0)}"
+            )
+
+    return (1 if run_code != 0 or parsed_code != 0 else 0), "\n".join(lines)
+
+
 def list_users_cached(server_key: str, ttl: float = 3.0) -> Tuple[int, List[str], str]:
     cached = _cache_get(server_key, ttl)
     if cached is not None:

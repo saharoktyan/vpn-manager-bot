@@ -482,7 +482,7 @@ def _admin_settings_capture_message(update: Update, context: CallbackContext) ->
 
 
 def _render_admin_settings_text(lang: str) -> str:
-    return f"{t(lang, 'admin.settings.title')}\n{t(lang, 'admin.settings.current_title', title=get_menu_title())}"
+    return t(lang, "admin.settings.title")
 
 
 def admin_menu_text_router(update: Update, context: CallbackContext) -> None:
@@ -512,7 +512,7 @@ def admin_menu_text_router(update: Update, context: CallbackContext) -> None:
                 context.bot,
                 int(admin_settings_state["chat_id"]),
                 int(admin_settings_state["message_id"]),
-                f"{t(lang, 'admin.settings.bot_title_saved')}\n\n{_render_admin_settings_text(lang)}",
+                f"{_render_admin_settings_text(lang)}\n\n{t(lang, 'admin.settings.bot_title_saved')}",
                 reply_markup=kb_admin_settings_menu(
                     _admin_notify_enabled(update.effective_user.id if update.effective_user else 0),
                     is_global_telemetry_enabled(),
