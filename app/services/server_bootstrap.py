@@ -2054,6 +2054,7 @@ if [[ "$STATE" != "running" ]]; then
   docker_cmd logs "$CONTAINER" >&2 || true
   echo "manual_run_output:" >&2
   docker_cmd run --rm \
+    --entrypoint /bin/sh \
     --cap-add NET_ADMIN \
     --device /dev/net/tun:/dev/net/tun \
     --sysctl net.ipv4.ip_forward=1 \
@@ -2062,7 +2063,15 @@ if [[ "$STATE" != "running" ]]; then
     -e AWG_NETWORK="${AWG_NETWORK:-10.8.1.0/24}" \
     -e AWG_LISTEN_PORT="$PORT" \
     -v "$DOCKER_DIR/data:/opt/amnezia/awg" \
-    "$IMAGE" >&2 || true
+    "$IMAGE" -c '
+      echo "shell: $(command -v sh 2>/dev/null || echo missing)"
+      ls -l /opt/amnezia/start.sh || true
+      wc -c /opt/amnezia/start.sh || true
+      echo "--- start.sh head ---"
+      sed -n "1,120p" /opt/amnezia/start.sh || true
+      echo "--- run ---"
+      /bin/sh -x /opt/amnezia/start.sh
+    ' >&2 || true
   exit 1
 fi
 
