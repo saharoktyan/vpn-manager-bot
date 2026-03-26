@@ -79,6 +79,16 @@ def safe_edit_message(
         )
     except RetryAfter as e:
         logger.warning("safe_edit_message rate limited: retry_after=%s", getattr(e, "retry_after", None))
+        try:
+            context.bot.send_message(
+                chat_id=q.message.chat_id,
+                text=text,
+                reply_markup=reply_markup,
+                parse_mode=parse_mode,
+                disable_web_page_preview=disable_preview,
+            )
+        except Exception:
+            logger.exception("safe_edit_message fallback send failed")
     except BadRequest as e:
         # "Message is not modified" etc.
         logger.warning("safe_edit_message: %s", e)
@@ -107,6 +117,16 @@ def safe_edit_by_ids(
         )
     except RetryAfter as e:
         logger.warning("safe_edit_by_ids rate limited: retry_after=%s", getattr(e, "retry_after", None))
+        try:
+            bot.send_message(
+                chat_id=chat_id,
+                text=text,
+                reply_markup=reply_markup,
+                parse_mode=parse_mode,
+                disable_web_page_preview=disable_web_page_preview,
+            )
+        except Exception:
+            logger.exception("safe_edit_by_ids fallback send failed")
     except BadRequest as e:
         logger.warning("safe_edit_by_ids: %s", e)
     except Exception as e:

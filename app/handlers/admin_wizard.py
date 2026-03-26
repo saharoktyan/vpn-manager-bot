@@ -132,19 +132,9 @@ def _start_progress_animation(context: CallbackContext, title: str) -> callable:
     chat_id = int(w["chat_id"])
     message_id = int(w["message_id"])
     lang = _wizard_lang(context)
-    stop_event = threading.Event()
-    frames = [".", "..", "..."]
-
-    def worker() -> None:
-        idx = 0
-        while not stop_event.is_set():
-            text = t(lang, "admin.wizard.work_in_progress", title=title, dots=frames[idx % len(frames)])
-            safe_edit_by_ids(context.bot, chat_id, message_id, text, InlineKeyboardMarkup([]), parse_mode=None)
-            idx += 1
-            stop_event.wait(3.0)
-
-    threading.Thread(target=worker, daemon=True).start()
-    return stop_event.set
+    text = t(lang, "admin.wizard.work_in_progress", title=title, dots="...")
+    safe_edit_by_ids(context.bot, chat_id, message_id, text, InlineKeyboardMarkup([]), parse_mode=None)
+    return lambda: None
 
 def _get_all_names() -> List[str]:
     subs = subs_store.read()
