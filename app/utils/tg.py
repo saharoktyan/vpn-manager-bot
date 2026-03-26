@@ -5,7 +5,7 @@ import logging
 from typing import Optional
 
 from telegram import InlineKeyboardMarkup, Update
-from telegram.error import BadRequest
+from telegram.error import BadRequest, RetryAfter
 from telegram.ext import CallbackContext
 
 logger = logging.getLogger(__name__)
@@ -16,6 +16,9 @@ def safe_delete_by_id(bot, chat_id: int, message_id: int) -> bool:
     try:
         bot.delete_message(chat_id=chat_id, message_id=message_id)
         return True
+    except RetryAfter as e:
+        logger.warning("safe_delete_by_id rate limited: retry_after=%s", getattr(e, "retry_after", None))
+        return False
     except Exception:
         return False
 
@@ -74,6 +77,8 @@ def safe_edit_message(
             parse_mode=parse_mode,
             disable_web_page_preview=disable_preview,
         )
+    except RetryAfter as e:
+        logger.warning("safe_edit_message rate limited: retry_after=%s", getattr(e, "retry_after", None))
     except BadRequest as e:
         # "Message is not modified" etc.
         logger.warning("safe_edit_message: %s", e)
@@ -100,6 +105,8 @@ def safe_edit_by_ids(
             parse_mode=parse_mode,
             disable_web_page_preview=disable_web_page_preview,
         )
+    except RetryAfter as e:
+        logger.warning("safe_edit_by_ids rate limited: retry_after=%s", getattr(e, "retry_after", None))
     except BadRequest as e:
         logger.warning("safe_edit_by_ids: %s", e)
     except Exception as e:

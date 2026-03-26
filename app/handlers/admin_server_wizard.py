@@ -134,7 +134,7 @@ def _start_progress_animation(context: CallbackContext, title: str) -> callable:
             text = t(lang, "admin.wizard.work_in_progress", title=title, dots=frames[idx % len(frames)])
             safe_edit_by_ids(context.bot, chat_id, message_id, text, InlineKeyboardMarkup([]), parse_mode=None)
             idx += 1
-            stop_event.wait(0.8)
+            stop_event.wait(3.0)
 
     threading.Thread(target=worker, daemon=True).start()
     return stop_event.set
